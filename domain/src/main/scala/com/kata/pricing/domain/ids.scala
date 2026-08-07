@@ -49,6 +49,20 @@ object OrderId:
 
   extension (id: OrderId) def value: String = id
 
+/** Correlation id for one request. It lives in the domain only because the outbound
+  * partner call has to carry it: see `LoyaltyClient.checkPerk`. Everything else about
+  * tracing (spans, exporters) stays in the service layer with natchez. */
+opaque type TraceId = String
+
+object TraceId:
+  def from(raw: String): Either[String, TraceId] =
+    val trimmed = raw.trim
+    if trimmed.isEmpty then Left("traceId must not be blank") else Right(trimmed)
+
+  def unsafe(raw: String): TraceId = raw
+
+  extension (id: TraceId) def value: String = id
+
 opaque type Sku = String
 
 object Sku:
