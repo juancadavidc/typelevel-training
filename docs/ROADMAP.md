@@ -70,6 +70,7 @@ Done:
   dependencies (see `docs/notes/validated-accumulation.md`).
 - Pure `Pricing.price`; `orderId` and `now` are parameters, never generated internally.
 - 15 weaver tests, every one `pureTest` or property-based. No effect runtime involved.
+  (Phase 3 added 3 more for `COUPON_NOT_FOUND`, which phase 2 declared but never emitted.)
 
 Deliberately **not** in phase 2:
 - The `F[_]` algebras (`CustomerRepo`, `CouponRepo`, `LoyaltyClient`) — phase 3.
@@ -87,8 +88,9 @@ Deliberately **not** in phase 2:
   codegen still emits `implicit val`, which that flag rejects under Scala 3.8.
 - **Rounding discounts DOWN** rather than HALF_UP — matches the spec's example and is the
   usual commercial convention (never give away fractions of a cent).
-- **Language consistency:** code comments are currently in Spanish and commit messages in
-  English. Pick one before opening the PR.
+- ~~**Language consistency**~~ — settled in phase 3: **everything written is English**
+  (code comments, test names, docs, commit messages). Phase 2's Spanish comments were
+  translated in place; spoken/chat working language stays Spanish.
 
 ## Git flow
 
