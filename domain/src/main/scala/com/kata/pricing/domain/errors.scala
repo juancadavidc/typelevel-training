@@ -4,9 +4,9 @@ import cats.data.NonEmptyList
 
 import java.time.Instant
 
-/** Los tres campos (`code`, `field`, `message`) no son decoración: son exactamente la
-  * forma del cuerpo 422 que especifica el PDF. Tenerlos en el ADT evita construir ese
-  * JSON a mano en la capa HTTP, donde sería fácil que se desincronizara.
+/** The three fields (`code`, `field`, `message`) are not decoration: they are exactly
+  * the shape of the 422 body the brief specifies. Holding them in the ADT avoids
+  * building that JSON by hand in the HTTP layer, where it would easily drift.
   */
 enum ValidationError(val code: String, val field: String, val message: String):
   case EmptyOrder
@@ -36,9 +36,9 @@ enum ValidationError(val code: String, val field: String, val message: String):
   case OrderBelowCouponMinimum(code0: String, minimum: Money)
       extends ValidationError("ORDER_BELOW_MINIMUM", "couponCode", s"Order total is below the ${minimum.amount} minimum required by $code0")
 
-/** El error de la aplicación entera. `Validation` lleva una `NonEmptyList` porque el
-  * 422 del PDF muestra dos errores a la vez — si llevara uno solo, ese ejemplo sería
-  * irreproducible. Ver `Validation.scala` para el porqué de `Validated` frente a `Either`.
+/** The error type for the whole application. `Validation` carries a `NonEmptyList`
+  * because the brief's 422 shows two errors at once — with a single error that example
+  * would be unreproducible. See `Validation.scala` for why `Validated` over `Either`.
   */
 enum AppError:
   case Validation(errors: NonEmptyList[ValidationError])

@@ -1,15 +1,16 @@
 package com.kata.pricing.domain
 
-/** Catálogo de precios como valor puro.
+/** The price catalog as a pure value.
   *
-  * Decisión deliberada: el PDF describe la búsqueda en DynamoDB sólo para customer y
-  * coupon ("look up customer tier and coupon rule from DynamoDB"), y el modelo de datos
-  * no incluye una tabla de productos. Así que el catálogo entra como dato al núcleo
-  * puro en vez de ser una cuarta tabla. Ventaja concreta: la validación de "SKU
-  * desconocido" se puede probar sin runtime de efectos ni LocalStack.
+  * A deliberate decision: the brief describes the DynamoDB lookup for customer and
+  * coupon only ("look up customer tier and coupon rule from DynamoDB"), and the data
+  * model defines no products table. So the catalog enters the pure core as data instead
+  * of being a fourth table. Concrete benefit: "unknown SKU" validation can be tested
+  * with no effect runtime and no LocalStack.
   *
-  * Si en la revisión piden persistirlo, el cambio es local: `Catalog` pasa a ser un
-  * álgebra `F[_]` y la validación recibe el `Map` ya resuelto. La firma pura no cambia.
+  * If a reviewer asks for it to be persisted, the change is local: `Catalog` becomes an
+  * `F[_]` algebra and validation receives the resolved `Map`. The pure signature does
+  * not change.
   */
 final class Catalog private (private val pricesBySku: Map[String, Money]):
   def priceOf(sku: Sku): Option[Money] = pricesBySku.get(sku.value)

@@ -2,16 +2,16 @@ package com.kata.pricing.domain
 
 import scala.math.BigDecimal.RoundingMode
 
-/** Identificadores y valores del dominio como `opaque type`.
+/** Domain identifiers and values as `opaque type`s.
   *
-  * Por qué opaque y no `type X = String`: un alias transparente no protege de nada —
-  * el compilador aceptaría pasar un `CouponCode` donde se espera un `CustomerId`.
-  * Y por qué no una `case class`: envolver añade un objeto en memoria por cada id.
-  * `opaque type` da la protección en compilación con coste cero en runtime.
+  * Why opaque and not `type X = String`: a transparent alias protects nothing — the
+  * compiler would happily accept a `CouponCode` where a `CustomerId` is expected. And
+  * why not a `case class`: wrapping allocates one object per id. `opaque type` gives
+  * compile-time protection at zero runtime cost.
   *
-  * Los constructores devuelven `Either` en vez de lanzar: construir un valor inválido
-  * debe ser imposible, no una excepción que alguien olvide capturar. Es "parse, don't
-  * validate": una vez tienes un `Sku`, ya no hay que volver a comprobar que no está vacío.
+  * The constructors return `Either` instead of throwing: building an invalid value must
+  * be impossible, not an exception someone forgets to catch. This is "parse, don't
+  * validate": once you hold a `Sku`, you never have to re-check that it is non-empty.
   */
 
 opaque type CustomerId = String
@@ -21,8 +21,8 @@ object CustomerId:
     val trimmed = raw.trim
     if trimmed.isEmpty then Left("customerId must not be blank") else Right(trimmed)
 
-  /** Sólo para datos que ya cruzaron una frontera validada (p. ej. el path de Smithy,
-    * que aplica `@length(min: 1)`) y para fixtures de test. */
+  /** Only for data that already crossed a validated boundary (e.g. the Smithy path,
+    * which enforces `@length(min: 1)`) and for test fixtures. */
   def unsafe(raw: String): CustomerId = raw
 
   extension (id: CustomerId) def value: String = id
@@ -60,8 +60,8 @@ object Sku:
 
   extension (sku: Sku) def value: String = sku
 
-/** Cantidad estrictamente positiva. Que el tipo lo garantice evita tener que
-  * defenderse de un cero o un negativo en cada cálculo posterior. */
+/** A strictly positive quantity. Having the type guarantee it removes the need to
+  * defend against a zero or a negative in every downstream calculation. */
 opaque type Quantity = Int
 
 object Quantity:
@@ -72,8 +72,8 @@ object Quantity:
 
   extension (q: Quantity) def value: Int = q
 
-/** Porcentaje acotado a 0..100. El acotamiento en el constructor es lo que permite
-  * demostrar después, sin más comprobaciones, que un descuento nunca supera el total. */
+/** A percentage bounded to 0..100. Bounding it in the constructor is what later lets us
+  * show, with no further checks, that a discount never exceeds the total. */
 opaque type Percent = Int
 
 object Percent:
@@ -84,12 +84,12 @@ object Percent:
 
   extension (p: Percent) def value: Int = p
 
-/** Dinero como `BigDecimal` con escala fija de 2 y redondeo HALF_UP.
+/** Money as a `BigDecimal` with a fixed scale of 2 and HALF_UP rounding.
   *
-  * Nunca `Double`: el 10% de 89.97 no es exactamente 8.997 en coma flotante binaria,
-  * y los property tests de ScalaCheck lo destapan como fallos que parecen bugs de
-  * lógica. Centralizar aquí el redondeo evita además que cada cálculo elija el suyo,
-  * que es como aparecen las diferencias de un céntimo entre subtotal y suma de líneas.
+  * Never `Double`: 10% of 89.97 is not exactly 8.997 in binary floating point, and the
+  * ScalaCheck property tests surface that as failures that look like logic bugs.
+  * Centralising rounding here also stops every calculation from picking its own, which
+  * is how one-cent discrepancies between the subtotal and the sum of lines appear.
   */
 opaque type Money = BigDecimal
 
@@ -108,22 +108,22 @@ object Money:
   extension (money: Money)
     def amount: BigDecimal = money
     infix def plus(other: Money): Money = Money(money.amount + other.amount)
-    /** Resta acotada por cero: un total nunca puede ser negativo, y expresarlo aquí
-      * es más fuerte que confiar en que ningún llamador reste de más. */
+    /** Subtraction floored at zero: a total can never be negative, and expressing that
+      * here is stronger than trusting no caller ever subtracts too much. */
     infix def minusFloored(other: Money): Money =
       val difference = money.amount - other.amount
       if difference < 0 then Money.zero else Money(difference)
     infix def times(factor: Int): Money = Money(money.amount * factor)
-    /** Redondeo DOWN, no HALF_UP, y a propósito.
+    /** Rounds DOWN, not HALF_UP, and deliberately so.
       *
-      * El PDF fija el resultado: 10% de 89.97 debe dar `discountAmount: 8.99` y
-      * `total: 80.98`. El valor exacto es 8.997, que con HALF_UP sería 9.00 y rompería
-      * el ejemplo del contrato. Redondear el descuento hacia abajo es además la
-      * convención comercial habitual: nunca se regalan fracciones de céntimo.
+      * The brief pins the result: 10% of 89.97 must yield `discountAmount: 8.99` and
+      * `total: 80.98`. The exact value is 8.997, which HALF_UP would turn into 9.00,
+      * breaking the contract's example. Rounding the discount down is also the usual
+      * commercial convention: never give away fractions of a cent.
       *
-      * `Percent.value(percent)` va en forma prefija porque `Money` está fuera del scope
-      * de `Percent`: allí ya no es un `Int` y su accessor sólo llega por el companion.
-      * Es la protección de los opaque types vista desde dentro.
+      * `Percent.value(percent)` is written in prefix form because `Money` sits outside
+      * `Percent`'s scope: there it is no longer an `Int` and its accessor only reaches
+      * us through the companion. That is opaque-type protection seen from the inside.
       */
     infix def percentOf(percent: Percent): Money =
       (money.amount * Percent.value(percent) / 100).setScale(Scale, RoundingMode.DOWN)

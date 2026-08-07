@@ -5,8 +5,8 @@ import org.scalacheck.Gen
 
 import java.time.Instant
 
-/** Fixtures y generadores. Ningún `IO` aquí: el núcleo es puro, así que los tests no
-  * necesitan runtime de efectos. Ese es el beneficio concreto de la regla 1 del DoD.
+/** Fixtures and generators. No `IO` anywhere: the core is pure, so the tests need no
+  * effect runtime. That is the concrete payoff of DoD rule 1.
   */
 object Fixtures:
 
@@ -40,12 +40,12 @@ object Fixtures:
       tiers
     )
 
-  /** Generadores de dinero con escala 2 y rango acotado.
+  /** Money generators with scale 2 and a bounded range.
     *
-    * Por qué no `Arbitrary[BigDecimal]` de serie: genera valores con cientos de dígitos
-    * y escalas arbitrarias que hacen fallar los tests por desbordamiento de escala, no
-    * por la lógica que se quería probar. Un generador de dinero *realista* encuentra
-    * bugs reales; uno patológico sólo encuentra ruido.
+    * Why not the stock `Arbitrary[BigDecimal]`: it produces values with hundreds of
+    * digits and arbitrary scales that fail the tests through scale overflow rather than
+    * through the logic under test. A *realistic* money generator finds real bugs; a
+    * pathological one only finds noise.
     */
   val moneyGen: Gen[Money] =
     Gen.choose(0L, 1_000_000L).map(cents => Money(BigDecimal(cents) / 100))

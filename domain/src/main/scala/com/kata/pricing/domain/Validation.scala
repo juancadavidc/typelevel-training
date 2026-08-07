@@ -5,23 +5,23 @@ import cats.syntax.all.*
 
 import java.time.Instant
 
-/** Validación acumulativa.
+/** Accumulating validation.
   *
-  * ESTE ES EL PUNTO QUE DECIDE EL 422. El PDF muestra una respuesta con dos errores
-  * simultáneos (UNKNOWN_SKU y COUPON_EXPIRED). `Either`/`EitherT` no pueden producirla:
-  * su `flatMap` corta en el primer `Left` por diseño, porque el paso siguiente puede
-  * depender del anterior. Eso está bien para el flujo general, y mal para validar.
+  * THIS IS THE POINT THAT DECIDES THE 422. The brief shows a response with two
+  * simultaneous errors (UNKNOWN_SKU and COUPON_EXPIRED). `Either`/`EitherT` cannot
+  * produce it: their `flatMap` stops at the first `Left` by design, because the next
+  * step may depend on the previous one. That is right for the overall flow, and wrong
+  * for validation.
   *
-  * `Validated` no tiene `Monad` — a propósito. Sólo tiene `Applicative`, y por eso
-  * `mapN` y `traverse` pueden ejecutar todas las ramas y juntar los errores: no hay
-  * dependencia entre ellas que obligue a esperar. La regla mental:
+  * `Validated` has no `Monad` — on purpose. It only has `Applicative`, which is why
+  * `mapN` and `traverse` can run every branch and join the errors: no dependency between
+  * them forces one to wait. The mental rule:
   *
-  *     mapN / traverse sobre Validated  -> acumulan
-  *     flatMap sobre Either / EitherT   -> cortan
+  *     mapN / traverse over Validated  -> accumulate
+  *     flatMap over Either / EitherT   -> short-circuit
   *
-  * Se usan las dos, cada una donde corresponde: `Validated` aquí dentro, `EitherT`
-  * en el flujo del servicio (si la validación falla, no tiene sentido seguir a
-  * calcular precio ni a escribir en Dynamo).
+  * Both are used, each where it belongs: `Validated` in here, `EitherT` in the service
+  * flow (if validation fails there is no point pricing or writing to Dynamo).
   */
 object Validation:
 
@@ -34,18 +34,19 @@ object Validation:
       coupon: Option[Coupon],
       now: Instant
   ): Result[ValidOrder] =
-    // Las líneas y las reglas del cupón que no dependen del importe se validan en
-    // paralelo con `tupled`, que acumula ambos lados. Ésa es la única forma de
-    // reproducir el 422 del PDF, que muestra UNKNOWN_SKU y COUPON_EXPIRED a la vez.
+    // The lines and the coupon rules that do not depend on the amount are validated in
+    // parallel with `tupled`, which accumulates both sides. That is the only way to
+    // reproduce the brief's 422, which shows UNKNOWN_SKU and COUPON_EXPIRED together.
     (
       validateLines(request.items, catalog),
       validateCouponRules(request.couponCode, coupon, customer.tier, now)
     ).tupled
       .andThen { (lines, validCoupon) =>
-        // `andThen` es el encadenado de Validated (corta, como `flatMap`) y aquí está
-        // acotado a la ÚNICA regla que depende del subtotal: el mínimo del cupón no se
-        // puede comprobar si las líneas no son válidas, porque no hay subtotal fiable.
-        // Acotarlo así es la diferencia entre una dependencia real y fail-fast por inercia.
+        // `andThen` is Validated's chaining (it short-circuits, like `flatMap`) and here
+        // it is scoped to the ONE rule that depends on the subtotal: the coupon minimum
+        // cannot be checked if the lines are invalid, because there is no trustworthy
+        // subtotal. Scoping it this way is the difference between a real dependency and
+        // fail-fast out of inertia.
         validateMinimumAmount(validCoupon, subtotalOf(lines))
           .map(_ => ValidOrder(customer, lines, validCoupon))
       }
@@ -60,8 +61,8 @@ object Validation:
     NonEmptyList.fromList(items) match
       case None => ValidationError.EmptyOrder.invalidNel
       case Some(nonEmpty) =>
-        // `traverse` recorre TODAS las líneas y acumula los errores de todas.
-        // Un `foldLeft` con `Either` habría parado en la primera mala.
+        // `traverse` walks EVERY line and accumulates the errors of all of them.
+        // A `foldLeft` over `Either` would have stopped at the first bad one.
         nonEmpty.zipWithIndex.traverse(validateLine(_, _, catalog))
 
   private def validateLine(item: RequestedItem, index: Int, catalog: Catalog): Result[OrderLine] =
@@ -79,21 +80,23 @@ object Validation:
         .leftMap(reason => ValidationError.InvalidQuantity(reason, index))
         .toValidatedNel
 
-    // mapN evalúa ambos lados aunque el primero ya haya fallado: un item con sku
-    // desconocido Y cantidad cero produce dos entradas en el 422, no una.
+    // mapN evaluates both sides even when the first has already failed: an item with an
+    // unknown sku AND a zero quantity produces two entries in the 422, not one.
     (sku, quantity).mapN { (validSku, validQuantity) =>
       OrderLine(validSku, validQuantity, catalog.priceOf(validSku).getOrElse(Money.zero))
     }
 
-  /** Reglas del cupón que sólo miran al propio cupón y al tier: caducidad, uso agotado
-    * y apilabilidad. Ninguna necesita el importe del pedido, así que pueden evaluarse
-    * aunque las líneas sean inválidas — y por eso llegan al 422 junto a los errores de item.
+  /** Coupon rules that only look at the coupon itself and at the tier: expiry, exhausted
+    * usage and stackability. None of them needs the order amount, so they can be
+    * evaluated even when the lines are invalid — which is why they reach the 422
+    * alongside the item errors.
     *
-    * `requested` es el código que venía en la petición y `coupon` lo que devolvió el
-    * repositorio. Contrastarlos AQUÍ, y no en el flujo de servicio, es lo que mantiene la
-    * acumulación: "el cupón no existe" es una regla de validación más y debe sumarse a los
-    * errores de los items. Si el flujo cortara con un `EitherT` al ver el `None` del repo,
-    * un pedido con SKU desconocido y cupón inexistente devolvería un solo error.
+    * `requested` is the code that came in the request and `coupon` is what the
+    * repository returned. Comparing them HERE, and not in the service flow, is what
+    * preserves accumulation: "the coupon does not exist" is one more validation rule and
+    * must add to the item errors. Had the flow short-circuited with `EitherT` on seeing
+    * the repo's `None`, an order with an unknown SKU and a nonexistent coupon would
+    * return a single error.
     */
   private def validateCouponRules(
       requested: Option[CouponCode],
@@ -118,11 +121,11 @@ object Validation:
         val stackable: Result[Unit] =
           Validated.condNel(candidate.stacksWith(tier), (), ValidationError.CouponNotStackableWithTier(code, tier))
 
-        // Un cupón caducado, agotado y no apilable devuelve los tres errores de una vez.
+        // A coupon that is expired, exhausted and non-stackable returns all three at once.
         (notExpired, notExhausted, stackable).mapN((_, _, _) => Some(candidate))
 
-  /** La única regla que necesita el subtotal, aislada para que su dependencia no
-    * arrastre al resto de la validación al comportamiento fail-fast. */
+  /** The only rule that needs the subtotal, isolated so that its dependency does not
+    * drag the rest of the validation into fail-fast behaviour. */
   private def validateMinimumAmount(coupon: Option[Coupon], subtotal: Money): Result[Unit] =
     coupon match
       case None => ().validNel

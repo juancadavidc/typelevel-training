@@ -2,17 +2,17 @@ package com.kata.pricing.domain
 
 import java.time.Instant
 
-/** El cálculo de precio: una función total, determinista y sin efectos.
+/** The price calculation: a total, deterministic, effect-free function.
   *
-  * `orderId` y `now` entran como parámetros en vez de generarse aquí dentro. Parece un
-  * detalle, pero es lo que hace que esta función sea testeable sin `IO` y que los
-  * property tests de ScalaCheck sean reproducibles: generar un UUID o leer el reloj
-  * son efectos, y viven en la capa de servicio.
+  * `orderId` and `now` come in as parameters instead of being generated in here. It
+  * looks like a detail, but it is what makes this function testable without `IO` and the
+  * ScalaCheck property tests reproducible: generating a UUID or reading the clock are
+  * effects, and they live in the service layer.
   *
-  * El perk del partner llega por separado de `ValidOrder` porque tiene otra naturaleza:
-  * la validación describe la petición, el perk es un enriquecimiento opcional que
-  * procede de un sistema externo poco fiable. Que sea `Option` en la firma es lo que
-  * obliga al llamador a decidir qué hacer cuando el partner falla.
+  * The partner perk arrives separately from `ValidOrder` because it has a different
+  * nature: validation describes the request, while the perk is an optional enrichment
+  * coming from an unreliable external system. Its being an `Option` in the signature is
+  * what forces the caller to decide what to do when the partner fails.
   */
 object Pricing:
 
@@ -26,9 +26,9 @@ object Pricing:
     val couponDiscount = order.coupon.fold(Money.zero)(c => subtotal.percentOf(c.discountPercent))
     val perkDiscount   = perk.fold(Money.zero)(p => subtotal.percentOf(p.extraDiscountPercent))
 
-    // Los dos descuentos se suman y luego se acotan al subtotal. Acotar aquí, y no
-    // confiar en que 10% + 15% nunca pase de 100, es lo que sostiene la propiedad
-    // "el total nunca es negativo" sea cual sea la combinación de cupón y perk.
+    // The two discounts are summed and then capped at the subtotal. Capping here, rather
+    // than trusting that 10% + 15% never exceeds 100, is what sustains the "the total is
+    // never negative" property for any combination of coupon and perk.
     val discountAmount = capAt(couponDiscount.plus(perkDiscount), subtotal)
 
     PricedOrder(
