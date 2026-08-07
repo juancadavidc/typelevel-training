@@ -1,71 +1,77 @@
 # AGENTS.md — Pricing kata (Scala 3 + Typelevel)
 
-Guide for AI agents working in this repository. Read it before writing or reviewing
-code. When in doubt about the stack, consult the `scala-typelevel-kata` skill.
+Operating instructions for AI agents in this repo. These are directives, not a README.
+Follow them; when a task matches a skill below, invoke that skill.
 
-## What this project is
+## Skills to use
 
-A pricing API (`POST /orders/price`) defined in **Smithy** and implemented with
-**smithy4s + http4s**. It validates against DynamoDB, persists the order, and a
-**Lambda** triggered by **DynamoDB Streams** publishes `OrderPriced` to **Kinesis**.
-It runs on **LocalStack** with infrastructure in **CDK**.
+- **`scala-typelevel-kata`** — invoke it whenever the task touches Scala code, the
+  Smithy model, the sbt build, weaver/ScalaCheck tests, CDK/LocalStack, or any of
+  smithy4s / cats-effect / http4s / chimney / ciris / fs2 / natchez. Read its relevant
+  `references/*.md` file **before** writing code in that area. It is the source of
+  truth for versions, wiring, and stack patterns — prefer it over guessing.
+- **`write_learning_note`** — after explaining a concept, feature, or gotcha the user
+  found useful (or when they say "save this" / "guarda esto"), use it to persist a note
+  to `docs/notes/<slug>.md`. Notes are written in English.
 
-The business scope is **deliberately minimal**. Do not add endpoints, rules, or
-abstractions the exercise does not ask for — what is evaluated is the FP style and
-stack handling, not domain richness. Over-building loses points.
+## Before you write code
 
-## Module layout (sbt)
+1. Confirm the change is in scope. The business scope is **deliberately minimal** — do
+   not add endpoints, rules, or abstractions the exercise does not ask for. If a request
+   would broaden the domain, say so before implementing.
+2. Identify the target module and respect its boundary (see layout below).
+3. If the area is new to you, read the matching `references/*.md` from the
+   `scala-typelevel-kata` skill first.
+4. Do not assert library versions from memory — check `build.sbt` (versions are pinned
+   at the top) or the skill's `references/versions.md`.
+
+## Enforce the Definition of Done
+
+Honor these when writing; flag violations when reviewing even if not asked, and always
+explain the *why* rather than citing the rule.
+
+1. `domain/` must not import `IO`, http4s, or the AWS SDK. Verify:
+   `grep -rn "import cats.effect.IO\|http4s\|awssdk" domain/src`.
+2. Keep logic polymorphic in `F[_]` (`EitherT`/`Kleisli`); interpret to `IO` only at
+   the composition root.
+3. Route every DTO↔domain↔persistence transformation through chimney; make custom
+   mappings explicit.
+4. Acquire AWS clients via `Resource`, never by hand.
+5. Ensure at least one weaver test uses `TestControl` over the partner timeout/retry.
+6. IDs are `opaque type`; ADTs are `enum`. No `var`, no shared mutable state.
+7. `make up && make deploy && make test-integration` must pass from a fresh checkout.
+
+## Watch for these traps
+
+- Money is `BigDecimal`, never `Double` (`bigDecimal Money` in Smithy).
+- Gather validation errors with `ValidatedNel` (the 422 returns several at once);
+  reserve `EitherT` for the fail-fast flow.
+- Verify smithy4s codegen produces sources before writing logic against it.
+- Stream delivery is at-least-once → make consumers idempotent.
+- `-source:future` breaks smithy4s codegen; it is enabled only in `domain` and
+  `lambda`, not `service`. See `build.sbt`.
+
+## Module boundaries
 
 ```
 domain/   ← PURE core. Models, validation, pricing. No effects, no AWS.
 service/  ← smithy4s + http4s + DynamoDB repos + partner client. IO lives here.
 lambda/   ← DynamoDB Streams → Kinesis processor, with fs2.
-cdk/      ← infrastructure. Reviewed as first-class code.
+cdk/      ← infrastructure, reviewed as first-class code.
 ```
 
-The module split is not cosmetic: it makes the pure-core rule compiler-verifiable
-(the `domain` classpath excludes cats-effect, http4s, and the AWS SDK).
+The split is compiler-enforced: `domain`'s classpath excludes cats-effect, http4s, and
+the AWS SDK, so rule 1 cannot be broken by accident. Keep it that way.
 
-## Mandatory rules (Definition of Done)
+## Conventions to apply
 
-Honor them when writing code; flag them when reviewing even if not asked. Always
-explain the *why*, don't just cite the rule.
-
-1. **The pure core (`domain/`) does not import `IO`, http4s, or the AWS SDK.**
-   Verifiable: `grep -rn "import cats.effect.IO\|http4s\|awssdk" domain/src`.
-2. **Polymorphic logic in `F[_]`** with `EitherT`/`Kleisli`, interpreted to `IO` only
-   at the composition root.
-3. **Every DTO↔domain↔persistence transformation goes through chimney.** Custom
-   mappings must be explicit and deliberate.
-4. **AWS clients via `Resource`**, never opened/closed by hand.
-5. **At least one weaver test uses `TestControl`** (cats-effect time control) over the
-   partner timeout/retry. Stubbing and asserting a value once is not enough.
-6. **IDs with `opaque type`** (`CustomerId`, `CouponCode`, `OrderId`, `Sku`), ADTs with
-   `enum`. No `var`, no shared mutable state.
-7. **`make up && make deploy && make test-integration` clean** from a fresh checkout.
-
-## Kata traps (anticipate them)
-
-- **Money in `BigDecimal`, never `Double`.** In Smithy it is `bigDecimal Money`.
-  Percentage discounts in `Double` fail the property tests in confusing ways.
-- **Accumulative validation with `ValidatedNel`, not `EitherT`.** The 422 carries
-  multiple simultaneous errors; `EitherT` short-circuits on the first. Use both:
-  `ValidatedNel` to gather validation errors, `EitherT` for the general fail-fast flow.
-- **smithy4s first and early.** It is the biggest technical risk. Verify the codegen
-  generates sources in Phase 1 before writing logic.
-- **Streams deliver at-least-once.** The consumer must be idempotent.
-- **`-source:future` breaks smithy4s codegen** (it emits `implicit val`). It is only
-  enabled in `domain` and `lambda`, not in `service`. See `build.sbt`.
-
-## Code conventions
-
-- **Scala 3.8.4.** Indentation syntax, `enum`, `opaque type`, `extension`.
-- **"Parse, don't validate":** opaque-type constructors return `Either`; `.unsafe(...)`
-  only for data that already crossed a validated boundary or for fixtures.
-- **Tests with weaver** (`weaver.framework.CatsEffect`) + ScalaCheck. Correct money
+- Scala 3.8.4: indentation syntax, `enum`, `opaque type`, `extension`.
+- "Parse, don't validate": opaque-type constructors return `Either`; use `.unsafe(...)`
+  only past a validated boundary or in fixtures.
+- Tests: weaver (`weaver.framework.CatsEffect`) + ScalaCheck with correct money
   generators (not `Double`).
-- **Language:** code, comments, and docs in English; keep domain/stack terms as-is
-  (`outbox`, `stream`, `opaque type`, `property test`).
+- Write code, comments, and docs in English; keep stack terms as-is (`outbox`,
+  `stream`, `opaque type`, `property test`).
 
 ## Commands
 
@@ -76,9 +82,3 @@ sbt domain/test        # tests for a single module
 sbt "service/run"      # start the API
 # make up / make deploy / make test-integration  ← LocalStack flow (once a Makefile exists)
 ```
-
-## When adding dependencies
-
-Verify versions before asserting them — this stack moves fast. Consult
-`references/versions.md` in the `scala-typelevel-kata` skill or Maven Central; do not
-cite versions from memory. Current versions are centralized at the top of `build.sbt`.

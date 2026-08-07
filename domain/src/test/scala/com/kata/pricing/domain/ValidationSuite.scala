@@ -110,8 +110,9 @@ object ValidationSuite extends SimpleIOSuite:
   }
 
   pureTest("el mínimo del cupón no se evalúa si las líneas son inválidas") {
-    // Delimita el único `andThen` de la validación: sin líneas válidas no hay subtotal,
-    // así que ORDER_BELOW_MINIMUM no puede afirmarse y se omite. Las demás reglas del
+    // Delimita el `andThen` de nivel superior de la validación: sin líneas válidas no
+    // hay subtotal, así que ORDER_BELOW_MINIMUM no puede afirmarse y se omite —
+    // afirmarlo con el subtotal parcial sería un error falso. Las demás reglas del
     // cupón sí se evalúan (ver el test de acumulación de arriba).
     val demanding = coupon(minOrderAmount = BigDecimal("100.00"))
 
