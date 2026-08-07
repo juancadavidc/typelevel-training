@@ -1,43 +1,49 @@
 # Opaque Types (Scala 3)
 
-> Nota de aprendizaje — 2026-08-07
+> Learning note — 2026-08-07
 
-## Qué es
-Un **opaque type** es un alias de tipo de Scala 3 que, **fuera de su ámbito de definición**, es un tipo distinto e incompatible con el tipo subyacente, pero **en runtime no añade ningún coste** (no hay wrapping/boxing como en una `case class`).
+## What it is
+An **opaque type** is a Scala 3 type alias that, **outside its defining scope**, is a
+distinct type incompatible with the underlying type, yet **adds no runtime cost** (no
+wrapping/boxing like a `case class`).
 
-## Por qué importa / cuándo usarlo
-Da seguridad de tipos para *newtypes* del dominio (identificadores, valores) sin overhead:
+## Why it matters / when to use it
+It gives type safety for domain *newtypes* (identifiers, values) with zero overhead:
 
-- Un `type` normal es transparente → no protege contra mezclar valores.
-- Una `case class` protege pero añade un objeto extra en memoria.
-- Un `opaque type` combina lo mejor: protección en compilación + cero coste en ejecución.
+- A plain `type` is transparent → no protection against mixing values.
+- A `case class` protects but adds an extra object in memory.
+- An `opaque type` combines the best of both: compile-time protection + zero runtime cost.
 
-Ideal para modelar `CustomerId`, `CouponCode`, `OrderId`, `Money`, etc. y evitar confundir un `OrderId` con un `CustomerId` aunque ambos sean `String`.
+Ideal for modeling `CustomerId`, `CouponCode`, `OrderId`, `Money`, etc. and avoiding
+accidentally swapping an `OrderId` for a `CustomerId` even when both are `String`.
 
-## Ejemplo
+## Example
 ```scala
 object domain:
   opaque type CustomerId = String
 
   object CustomerId:
-    // smart constructor con validación (refleja @length(min: 1) del Smithy)
+    // smart constructor with validation (mirrors @length(min: 1) in the Smithy model)
     def from(s: String): Either[String, CustomerId] =
-      if s.nonEmpty then Right(s) else Left("customerId vacío")
+      if s.nonEmpty then Right(s) else Left("empty customerId")
 
     extension (id: CustomerId)
       def value: String = id
 
 import domain.*
 val id  = CustomerId.from("abc")  // Either[String, CustomerId]
-// val s: String = id             // ❌ no compila: CustomerId no es String aquí
+// val s: String = id             // ❌ does not compile: CustomerId is not String here
 ```
 
-- **Dentro** del scope de definición, `CustomerId` y `String` son intercambiables.
-- **Fuera**, son tipos distintos → el compilador te protege.
-- **En runtime** es literalmente un `String`.
+- **Inside** the defining scope, `CustomerId` and `String` are interchangeable.
+- **Outside**, they are distinct types → the compiler protects you.
+- **At runtime** it is literally a `String`.
 
-## Notas / gotchas
-- El acceso al valor subyacente se suele exponer con un `extension` (`.value`) o un método en el companion.
-- Los constructores viven en el companion `object` para poder validar (smart constructors).
-- smithy4s genera newtypes propios para los tipos del Smithy, así que a veces no necesitas escribir el opaque type a mano — pero conocerlo ayuda a entender lo generado y a modelar valores extra del dominio.
-- Se pueden restringir con límites: `opaque type Positive <: Int = Int`.
+## Notes / gotchas
+- Access to the underlying value is usually exposed with an `extension` (`.value`) or a
+  method on the companion.
+- Constructors live in the companion `object` so they can validate (smart constructors).
+- smithy4s generates its own newtypes for the Smithy types, so sometimes you don't need
+  to hand-write the opaque type — but knowing it helps you understand what's generated
+  and how to model extra domain values.
+- They can be constrained with bounds: `opaque type Positive <: Int = Int`.
