@@ -95,6 +95,35 @@ object ValidationSuite extends SimpleIOSuite:
     )
   }
 
+  pureTest("un cupón que se pidió pero no existe falla con COUPON_NOT_FOUND") {
+    // El repositorio devuelve None para un código que sí venía en la petición. Ese caso
+    // no lo puede decidir el flujo antes de validar: si cortara ahí, el 422 traería un
+    // solo error. Ver el test siguiente.
+    val result =
+      Validation.validate(request(("SKU-001", 1))(Some("NOPE")), customer(), catalog, coupon = None, now)
+
+    expect(errorsOf(result).map(_.code) == List("COUPON_NOT_FOUND"))
+  }
+
+  pureTest("un cupón inexistente acumula con los errores de items, no corta") {
+    // La razón por la que este chequeo vive en Validation y no en el flujo de servicio:
+    // 'existe el cupón' es una regla de validación más, y tiene que sumarse a las demás.
+    val result =
+      Validation.validate(request(("SKU-999", 1))(Some("NOPE")), customer(), catalog, coupon = None, now)
+
+    val codes = errorsOf(result).map(_.code)
+    expect.all(
+      codes.contains("UNKNOWN_SKU"),
+      codes.contains("COUPON_NOT_FOUND"),
+      codes.size == 2
+    )
+  }
+
+  pureTest("una petición sin cupón no produce COUPON_NOT_FOUND") {
+    val result = Validation.validate(request(("SKU-001", 1))(), customer(), catalog, coupon = None, now)
+    expect(result.isValid)
+  }
+
   pureTest("un pedido por debajo del mínimo del cupón se rechaza") {
     val demanding = coupon(minOrderAmount = BigDecimal("100.00"))
 

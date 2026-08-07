@@ -37,7 +37,10 @@ object Validation:
     // Las líneas y las reglas del cupón que no dependen del importe se validan en
     // paralelo con `tupled`, que acumula ambos lados. Ésa es la única forma de
     // reproducir el 422 del PDF, que muestra UNKNOWN_SKU y COUPON_EXPIRED a la vez.
-    (validateLines(request.items, catalog), validateCouponRules(coupon, customer.tier, now)).tupled
+    (
+      validateLines(request.items, catalog),
+      validateCouponRules(request.couponCode, coupon, customer.tier, now)
+    ).tupled
       .andThen { (lines, validCoupon) =>
         // `andThen` es el encadenado de Validated (corta, como `flatMap`) y aquí está
         // acotado a la ÚNICA regla que depende del subtotal: el mínimo del cupón no se
@@ -84,15 +87,26 @@ object Validation:
 
   /** Reglas del cupón que sólo miran al propio cupón y al tier: caducidad, uso agotado
     * y apilabilidad. Ninguna necesita el importe del pedido, así que pueden evaluarse
-    * aunque las líneas sean inválidas — y por eso llegan al 422 junto a los errores de item. */
+    * aunque las líneas sean inválidas — y por eso llegan al 422 junto a los errores de item.
+    *
+    * `requested` es el código que venía en la petición y `coupon` lo que devolvió el
+    * repositorio. Contrastarlos AQUÍ, y no en el flujo de servicio, es lo que mantiene la
+    * acumulación: "el cupón no existe" es una regla de validación más y debe sumarse a los
+    * errores de los items. Si el flujo cortara con un `EitherT` al ver el `None` del repo,
+    * un pedido con SKU desconocido y cupón inexistente devolvería un solo error.
+    */
   private def validateCouponRules(
+      requested: Option[CouponCode],
       coupon: Option[Coupon],
       tier: Tier,
       now: Instant
   ): Result[Option[Coupon]] =
-    coupon match
-      case None => None.validNel
-      case Some(candidate) =>
+    (requested, coupon) match
+      case (None, _) => None.validNel
+
+      case (Some(code), None) => ValidationError.CouponNotFound(code.value).invalidNel
+
+      case (Some(_), Some(candidate)) =>
         val code = candidate.code.value
 
         val notExpired: Result[Unit] =
