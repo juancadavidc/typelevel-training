@@ -90,6 +90,22 @@ Deliberately **not** in phase 2:
 - **Language consistency:** code comments are currently in Spanish and commit messages in
   English. Pick one before opening the PR.
 
+## Git flow
+
+Phases 1–2 landed directly on `main` (the remote was empty, so there was no base branch
+to open a pull request against). **From phase 3 onward, each phase goes on its own branch
+and merges through a PR** — one reviewable unit per phase:
+
+```
+git switch -c feature/phase-3-polymorphic-orchestration
+# ... work ...
+gh pr create --base main
+```
+
+The remote uses the `github.com-personal` SSH alias (`~/.ssh/id_ed25519_personal`,
+account `juancadavidc`). `gh` on this machine defaults to a different github.com account,
+so `gh pr create` may need `gh auth switch -h github.com -u juancadavidc` first.
+
 ## Environment
 
 - JDK 21 (`sdk env` in this directory — JDK 25 breaks sbt).
