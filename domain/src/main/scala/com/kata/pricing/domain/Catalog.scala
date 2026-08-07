@@ -11,11 +11,13 @@ package com.kata.pricing.domain
   * If a reviewer asks for it to be persisted, the change is local: `Catalog` becomes an
   * `F[_]` algebra and validation receives the resolved `Map`. The pure signature does
   * not change.
+  *
+  * One lookup, one answer: there is deliberately no `contains`. "Does this sku exist"
+  * and "what does it cost" are the same question, and splitting them into two methods is
+  * what invites a caller to check one and then fall back on the other.
   */
 final class Catalog private (private val pricesBySku: Map[String, Money]):
   def priceOf(sku: Sku): Option[Money] = pricesBySku.get(sku.value)
-  def contains(sku: Sku): Boolean      = pricesBySku.contains(sku.value)
-  def size: Int                        = pricesBySku.size
 
 object Catalog:
   val empty: Catalog = new Catalog(Map.empty)

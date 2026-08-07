@@ -39,11 +39,16 @@ enum ValidationError(val code: String, val field: String, val message: String):
 /** The error type for the whole application. `Validation` carries a `NonEmptyList`
   * because the brief's 422 shows two errors at once — with a single error that example
   * would be unreproducible. See `Validation.scala` for why `Validated` over `Either`.
+  *
+  * Only errors the domain can *name* live here. There is deliberately no `Persistence`
+  * case: `OrderRepo.save` returns `F[Unit]`, so nothing could ever construct one, and a
+  * case no path emits is a promise the type makes and the code does not keep — the same
+  * defect `ValidationError.CouponNotFound` had. Infrastructure failures stay as errors
+  * of `F` and the composition root maps them to a 500.
   */
 enum AppError:
   case Validation(errors: NonEmptyList[ValidationError])
   case CustomerNotFound(id: CustomerId)
-  case Persistence(reason: String)
 
 object AppError:
   def validation(head: ValidationError, tail: ValidationError*): AppError =

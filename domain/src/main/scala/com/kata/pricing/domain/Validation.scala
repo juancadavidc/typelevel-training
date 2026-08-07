@@ -66,13 +66,22 @@ object Validation:
         nonEmpty.zipWithIndex.traverse(validateLine(_, _, catalog))
 
   private def validateLine(item: RequestedItem, index: Int, catalog: Catalog): Result[OrderLine] =
-    val sku: Result[Sku] =
+    /* The catalog is read once, and its answer *is* the parse: a sku with no price is an
+     * UnknownSku, and a sku that survives carries its price with it. Asking `contains`
+     * and then re-reading the price left a second branch with a `getOrElse(Money.zero)`
+     * fallback — unreachable today, but only because of a check three lines above it.
+     * The day that check moves, an unknown sku prices the line at zero and emits no
+     * error, which in a pricing service is the worst possible failure mode. Returning
+     * the price makes the case impossible to express rather than merely unreachable. */
+    val priced: Result[(Sku, Money)] =
       Sku.from(item.sku)
         .leftMap(reason => ValidationError.InvalidSku(reason, index))
         .toValidatedNel
         .andThen { parsed =>
-          if catalog.contains(parsed) then parsed.validNel
-          else ValidationError.UnknownSku(item.sku, index).invalidNel
+          catalog
+            .priceOf(parsed)
+            .toValidNel(ValidationError.UnknownSku(item.sku, index))
+            .map(parsed -> _)
         }
 
     val quantity: Result[Quantity] =
@@ -82,8 +91,8 @@ object Validation:
 
     // mapN evaluates both sides even when the first has already failed: an item with an
     // unknown sku AND a zero quantity produces two entries in the 422, not one.
-    (sku, quantity).mapN { (validSku, validQuantity) =>
-      OrderLine(validSku, validQuantity, catalog.priceOf(validSku).getOrElse(Money.zero))
+    (priced, quantity).mapN { case ((validSku, unitPrice), validQuantity) =>
+      OrderLine(validSku, validQuantity, unitPrice)
     }
 
   /** Coupon rules that only look at the coupon itself and at the tier: expiry, exhausted
