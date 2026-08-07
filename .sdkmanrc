@@ -1,0 +1,3 @@
+# Este proyecto usa JDK 21 (LTS). JDK 25 rompe sbt (removió SecurityManager).
+# Ejecuta `sdk env` en este directorio (o instala la extensión sdkman auto-env).
+java=21.0.2-tem
