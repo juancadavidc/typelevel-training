@@ -121,10 +121,10 @@ asserting it would be wrong.
 ## Notes / gotchas
 - Two tests in `domain/src/test/scala/com/kata/pricing/domain/ValidationSuite.scala` pin
   this design:
-  - `"el mínimo del cupón no se evalúa si las líneas son inválidas"` (`:112`) asserts
+  - `"the coupon minimum is not evaluated when the lines are invalid"` asserts
     `UNKNOWN_SKU` is present and `ORDER_BELOW_MINIMUM` is **not** — it pins the `andThen`
     boundary.
-  - `"acumula errores de items y de cupón en la misma respuesta"` (`:39`) asserts
+  - `"accumulates item and coupon errors in the same response"` asserts
     `UNKNOWN_SKU` + `COUPON_EXPIRED` come back together, `codes.size == 2` — **that is the
     test that would fail if someone reached for `EitherT` here**, not from a calculation
     bug but from picking the wrong abstraction.

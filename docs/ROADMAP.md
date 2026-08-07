@@ -11,7 +11,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 |---|---|---|
 | 1 | sbt multi-module skeleton + Smithy model + verify smithy4s codegen generates sources | ✅ done |
 | 2 | Pure domain core: opaque types, enums, BigDecimal money, `Validated` accumulating validation, pricing | ✅ done |
-| 3 | Polymorphic orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | ⬜ next |
+| 3 | Polymorphic orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | ✅ done — [design](specs/2026-08-07-phase-3-orchestration-design.md) |
 | 4 | chimney transformations DTO ↔ domain ↔ persistence | ⬜ |
 | 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ⬜ |
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ⬜ |
@@ -26,7 +26,7 @@ Straight from the spec — this is the review checklist.
 | # | Requirement | Status | Where |
 |---|---|---|---|
 | 1 | Pure core has zero imports of `IO`, http4s or the DynamoDB SDK; testable with no effect runtime | ✅ | `domain/` depends only on `cats-core`; verified by the grep below |
-| 2 | Business logic polymorphic over `F[_]` via `EitherT`/`Kleisli`, interpreted to `IO` only at the composition root | ⬜ | phase 3 + 5 |
+| 2 | Business logic polymorphic over `F[_]` via `EitherT`/`Kleisli`, interpreted to `IO` only at the composition root | ✅ half | `PricingFlow[F]` landed in phase 3; the `IO` interpretation is phase 5 |
 | 3 | All DTO/domain/persistence transformations go through chimney; custom mappings are deliberate | ⬜ | phase 4 |
 | 4 | Order write + event emission — **see the contradiction below** | ⬜ | phase 7 |
 | 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ⬜ | phase 5 + 7 |
@@ -37,10 +37,18 @@ Straight from the spec — this is the review checklist.
 ### Verifying DoD #1
 
 ```bash
-grep -rn "cats.effect\|http4s\|awssdk\|smithy4s" domain/src/main && echo FAIL || echo OK
+grep -rnE "^\s*import\s+(cats\.effect|org\.http4s|software\.amazon|smithy4s|com\.disneystreaming)" \
+  domain/src/main && echo FAIL || echo OK
 ```
 
-Worth wiring into CI: it is the cheapest bullet to verify and the most embarrassing to fail.
+Anchored to `import` lines on purpose. The looser version this replaced matched *prose in
+scaladoc* — phase 3's comments explain why `cats-effect` is absent, and that alone turned
+it red. A check that cries wolf gets ignored, which is worse than no check.
+
+Worth wiring into CI, but say plainly in review what it is: a **readability aid, not the
+enforcement**. The enforcement is `build.sbt` — `domain`'s only dependency is `cats-core`,
+so a reference to `IO` does not fail a grep, it fails to compile. That is the difference
+between a rule and a convention.
 
 ### The DoD #4 contradiction — decide in phase 7
 
@@ -70,11 +78,38 @@ Done:
   dependencies (see `docs/notes/validated-accumulation.md`).
 - Pure `Pricing.price`; `orderId` and `now` are parameters, never generated internally.
 - 15 weaver tests, every one `pureTest` or property-based. No effect runtime involved.
+  (Phase 3 added 3 more for `COUPON_NOT_FOUND`, which phase 2 declared but never emitted.)
 
 Deliberately **not** in phase 2:
 - The `F[_]` algebras (`CustomerRepo`, `CouponRepo`, `LoyaltyClient`) — phase 3.
 - The `EitherT.fromEither` bridge from validation to the service flow — phase 3.
 - Any mapping to/from the smithy4s-generated types — phase 4.
+
+## Phase 3 — what actually landed
+
+Full reasoning in [the design spec](specs/2026-08-07-phase-3-orchestration-design.md).
+
+Done, all of it in `domain/` — zero lines in `service/`:
+- Algebras over `F[_]`: `CustomerRepo`, `CouponRepo`, `OrderRepo`, `IdGen`, `LoyaltyClient`.
+  No `Clock[F]`: the timestamp is read at the edge and rides in `RequestContext`.
+- `PricingFlow[F[_]: Monad]` — steps 1–6 of the brief as
+  `Kleisli[EitherT[F, AppError, *], RequestContext, *]`. Algebras by constructor, context
+  by `Kleisli`, because they have different lifetimes.
+- `fromValidated`, the `Validated -> EitherT` hinge: accumulate inside validation, then
+  fail-fast for the rest of the flow.
+- `TraceId` opaque type — in the domain only because `LoyaltyClient` has to carry it out.
+- 7 weaver tests instantiating the flow at **two different `F`s, neither of them `IO`**:
+  `cats.Id` for what the flow returns, `Writer[Chain[String], *]` for what it *does*
+  (asserting persistence and call order with no `var`).
+- Fixed a phase 2 defect it uncovered: `COUPON_NOT_FOUND` was declared but never emitted.
+
+Deliberately **not** in phase 3:
+- Any `IO`, `Resource` or composition root — phase 5.
+- The DynamoDB and http4s implementations of the algebras — phases 5 and 6.
+- Mapping to/from the smithy4s types — phase 4.
+
+Carried forward: `AppError.CustomerNotFound` has no shape in the Smithy contract, so it
+would surface as a 500 today. Phase 4 adds it.
 
 ## Open decisions to defend in review
 
@@ -87,8 +122,9 @@ Deliberately **not** in phase 2:
   codegen still emits `implicit val`, which that flag rejects under Scala 3.8.
 - **Rounding discounts DOWN** rather than HALF_UP — matches the spec's example and is the
   usual commercial convention (never give away fractions of a cent).
-- **Language consistency:** code comments are currently in Spanish and commit messages in
-  English. Pick one before opening the PR.
+- ~~**Language consistency**~~ — settled in phase 3: **everything written is English**
+  (code comments, test names, docs, commit messages). Phase 2's Spanish comments were
+  translated in place; spoken/chat working language stays Spanish.
 
 ## Git flow
 

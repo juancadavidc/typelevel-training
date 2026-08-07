@@ -6,18 +6,18 @@ import weaver.scalacheck.Checkers
 
 import com.kata.pricing.domain.Fixtures.*
 
-/** `pureTest` en lugar de `test`: no hay `IO` en ninguna parte porque no hay nada que
-  * ejecutar. Que toda esta suite pueda ser `pureTest` es la prueba viva de que el
-  * núcleo es puro — si un día hiciera falta `test`, sería señal de que un efecto se
-  * coló en la capa que no debe tenerlos.
+/** `pureTest` rather than `test`: there is no `IO` anywhere because there is nothing to
+  * run. That this whole suite can be `pureTest` is living proof that the core is pure —
+  * the day `test` becomes necessary would be the sign that an effect leaked into the
+  * layer that must not have any.
   */
 object PricingSuite extends SimpleIOSuite with Checkers:
 
   private val orderId = OrderId.unsafe("ord-9f2c9b7a")
 
-  // weaver exige `Show` para el tipo generado: cuando una propiedad falla, imprime el
-  // contraejemplo concreto. Sin esto tendrías "property failed" y ningún dato con el
-  // que reproducir. `fromToString` basta porque son case classes.
+  // weaver requires `Show` for the generated type: when a property fails it prints the
+  // concrete counterexample. Without this you would get "property failed" and no data to
+  // reproduce it with. `fromToString` suffices because these are case classes.
   private given cats.Show[ValidOrder] = cats.Show.fromToString
   private given cats.Show[Perk]       = cats.Show.fromToString
 
@@ -28,7 +28,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
       )
     )
 
-  pureTest("reproduce el ejemplo exacto del PDF") {
+  pureTest("reproduces the brief's exact example") {
     val order = ValidOrder(
       customer(),
       lines(("SKU-001", 2, "19.99"), ("SKU-045", 1, "49.99")),
@@ -37,7 +37,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
 
     val priced = Pricing.price(order, perk = None, orderId, now)
 
-    // expect.all acumula: si fallan tres aserciones, se ven las tres.
+    // expect.all accumulates: if three assertions fail, all three are reported.
     expect.all(
       priced.subtotal.amount == BigDecimal("89.97"),
       priced.discountAmount.amount == BigDecimal("8.99"),
@@ -47,7 +47,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     )
   }
 
-  pureTest("un cupón del 100% deja el total en cero exacto, no en negativo ni en -0.00") {
+  pureTest("a 100% coupon leaves the total at exactly zero, not negative nor -0.00") {
     val order = ValidOrder(customer(), lines(("SKU-001", 1, "19.99")), Some(coupon(percent = 100)))
     val priced = Pricing.price(order, perk = None, orderId, now)
 
@@ -57,7 +57,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     )
   }
 
-  pureTest("cupón y perk juntos no pueden empujar el total por debajo de cero") {
+  pureTest("coupon and perk together cannot push the total below zero") {
     val order  = ValidOrder(customer(), lines(("SKU-001", 1, "19.99")), Some(coupon(percent = 80)))
     val priced = Pricing.price(order, Some(Perk(Percent.unsafe(80))), orderId, now)
 
@@ -67,7 +67,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     )
   }
 
-  pureTest("el subtotal es la suma de los line totals") {
+  pureTest("the subtotal is the sum of the line totals") {
     val order  = ValidOrder(customer(), lines(("SKU-001", 3, "19.99"), ("SKU-100", 2, "5.00")), None)
     val priced = Pricing.price(order, perk = None, orderId, now)
 
@@ -75,10 +75,10 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     expect(priced.subtotal.amount == sumOfLines)
   }
 
-  // Las dos propiedades que nombra el PDF. Son invariantes del dominio, no una
-  // reimplementación del cálculo — un test que recalcula el precio con la misma
-  // fórmula no prueba nada, sólo duplica el bug si lo hay.
-  test("propiedad: el total nunca es negativo y nunca supera el subtotal") {
+  // The two properties the brief names. They are domain invariants, not a
+  // reimplementation of the calculation — a test that recomputes the price with the same
+  // formula proves nothing, it only duplicates the bug if there is one.
+  test("property: the total is never negative and never exceeds the subtotal") {
     forall(Fixtures.validOrderGen) { order =>
       val priced = Pricing.price(order, perk = None, orderId, now)
       expect.all(
@@ -89,7 +89,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     }
   }
 
-  test("propiedad: la invariante se mantiene con cualquier combinación de cupón y perk") {
+  test("property: the invariant holds for any combination of coupon and perk") {
     val combined = for
       order <- Fixtures.validOrderGen
       perk  <- Fixtures.perkGen
@@ -105,7 +105,7 @@ object PricingSuite extends SimpleIOSuite with Checkers:
     }
   }
 
-  test("propiedad: todo importe de dinero sale con escala 2") {
+  test("property: every money amount comes out with scale 2") {
     forall(Fixtures.validOrderGen) { order =>
       val priced = Pricing.price(order, perk = None, orderId, now)
       expect.all(

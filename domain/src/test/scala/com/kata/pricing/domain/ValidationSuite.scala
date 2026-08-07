@@ -19,7 +19,7 @@ object ValidationSuite extends SimpleIOSuite:
       case Validated.Invalid(errors) => errors.toList
       case Validated.Valid(_)        => Nil
 
-  pureTest("una petición válida produce un ValidOrder") {
+  pureTest("a valid request produces a ValidOrder") {
     val result = Validation.validate(
       request(("SKU-001", 2), ("SKU-045", 1))(),
       customer(),
@@ -30,13 +30,13 @@ object ValidationSuite extends SimpleIOSuite:
     expect(result.isValid)
   }
 
-  /** ESTE es el test que delata haber usado EitherT donde iba Validated.
+  /** THIS is the test that exposes having used EitherT where Validated belonged.
     *
-    * El PDF muestra un 422 con UNKNOWN_SKU y COUPON_EXPIRED simultáneos. Con `EitherT`
-    * la lista tendría exactamente un elemento y este test fallaría — no por un error de
-    * cálculo, sino por haber elegido la abstracción equivocada.
+    * The brief shows a 422 with UNKNOWN_SKU and COUPON_EXPIRED at once. With `EitherT`
+    * the list would hold exactly one element and this test would fail — not through a
+    * calculation error, but through picking the wrong abstraction.
     */
-  pureTest("acumula errores de items y de cupón en la misma respuesta") {
+  pureTest("accumulates item and coupon errors in the same response") {
     val expired = coupon(code = "SUMMER10", expiresAt = now.minusSeconds(86_400))
 
     val result = Validation.validate(
@@ -56,7 +56,7 @@ object ValidationSuite extends SimpleIOSuite:
     )
   }
 
-  pureTest("un mismo item con sku desconocido y cantidad inválida da dos errores, no uno") {
+  pureTest("one item with an unknown sku and an invalid quantity yields two errors, not one") {
     val result = Validation.validate(request(("SKU-999", 0))(), customer(), catalog, None, now)
 
     val codes = errorsOf(result).map(_.code)
@@ -67,7 +67,7 @@ object ValidationSuite extends SimpleIOSuite:
     )
   }
 
-  pureTest("acumula los errores de todos los items, no sólo del primero malo") {
+  pureTest("accumulates errors from every item, not just the first bad one") {
     val result =
       Validation.validate(request(("SKU-998", 1), ("SKU-001", 1), ("SKU-999", 1))(), customer(), catalog, None, now)
 
@@ -75,7 +75,7 @@ object ValidationSuite extends SimpleIOSuite:
     expect.all(fields.contains("items[0].sku"), fields.contains("items[2].sku"), fields.size == 2)
   }
 
-  pureTest("un cupón caducado, agotado y no apilable devuelve los tres errores a la vez") {
+  pureTest("a coupon that is expired, exhausted and non-stackable yields all three errors at once") {
     val bad = coupon(
       expiresAt = now.minusSeconds(1),
       usageLimit = 5,
@@ -95,7 +95,36 @@ object ValidationSuite extends SimpleIOSuite:
     )
   }
 
-  pureTest("un pedido por debajo del mínimo del cupón se rechaza") {
+  pureTest("a coupon that was requested but does not exist fails with COUPON_NOT_FOUND") {
+    // The repository returns None for a code that did come in the request. The flow
+    // cannot decide this case before validating: short-circuiting there would put a
+    // single error in the 422. See the next test.
+    val result =
+      Validation.validate(request(("SKU-001", 1))(Some("NOPE")), customer(), catalog, coupon = None, now)
+
+    expect(errorsOf(result).map(_.code) == List("COUPON_NOT_FOUND"))
+  }
+
+  pureTest("a nonexistent coupon accumulates with the item errors, it does not short-circuit") {
+    // The reason this check lives in Validation and not in the service flow: "the coupon
+    // exists" is one more validation rule, and it has to add to the others.
+    val result =
+      Validation.validate(request(("SKU-999", 1))(Some("NOPE")), customer(), catalog, coupon = None, now)
+
+    val codes = errorsOf(result).map(_.code)
+    expect.all(
+      codes.contains("UNKNOWN_SKU"),
+      codes.contains("COUPON_NOT_FOUND"),
+      codes.size == 2
+    )
+  }
+
+  pureTest("a request with no coupon does not produce COUPON_NOT_FOUND") {
+    val result = Validation.validate(request(("SKU-001", 1))(), customer(), catalog, coupon = None, now)
+    expect(result.isValid)
+  }
+
+  pureTest("an order below the coupon minimum is rejected") {
     val demanding = coupon(minOrderAmount = BigDecimal("100.00"))
 
     val result =
@@ -104,16 +133,16 @@ object ValidationSuite extends SimpleIOSuite:
     expect(errorsOf(result).map(_.code) == List("ORDER_BELOW_MINIMUM"))
   }
 
-  pureTest("un pedido sin items falla con EMPTY_ORDER") {
+  pureTest("an order with no items fails with EMPTY_ORDER") {
     val result = Validation.validate(request()(), customer(), catalog, None, now)
     expect(errorsOf(result).map(_.code) == List("EMPTY_ORDER"))
   }
 
-  pureTest("el mínimo del cupón no se evalúa si las líneas son inválidas") {
-    // Delimita el `andThen` de nivel superior de la validación: sin líneas válidas no
-    // hay subtotal, así que ORDER_BELOW_MINIMUM no puede afirmarse y se omite —
-    // afirmarlo con el subtotal parcial sería un error falso. Las demás reglas del
-    // cupón sí se evalúan (ver el test de acumulación de arriba).
+  pureTest("the coupon minimum is not evaluated when the lines are invalid") {
+    // This pins down the top-level `andThen` in validation: with no valid lines there is
+    // no subtotal, so ORDER_BELOW_MINIMUM cannot be asserted and is omitted — asserting
+    // it from a partial subtotal would be a false error. The other coupon rules *are*
+    // evaluated (see the accumulation test above).
     val demanding = coupon(minOrderAmount = BigDecimal("100.00"))
 
     val result =
