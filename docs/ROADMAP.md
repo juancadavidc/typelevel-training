@@ -11,7 +11,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 |---|---|---|
 | 1 | sbt multi-module skeleton + Smithy model + verify smithy4s codegen generates sources | ✅ done |
 | 2 | Pure domain core: opaque types, enums, BigDecimal money, `Validated` accumulating validation, pricing | ✅ done |
-| 3 | Polymorphic orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | ⬜ next |
+| 3 | Polymorphic orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | 🔨 in progress — [design](specs/2026-08-07-phase-3-orchestration-design.md) |
 | 4 | chimney transformations DTO ↔ domain ↔ persistence | ⬜ |
 | 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ⬜ |
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ⬜ |
