@@ -1,0 +1,61 @@
+# The interactive dev loop: LocalStack plus a WireMock standing in for the loyalty
+# partner. The API itself is not in here — it runs from sbt so a code change is a
+# recompile rather than an image rebuild. `make run-api` starts it with the right
+# environment.
+#
+# The automated integration tests do not use this file; they bring up their own
+# LocalStack through testcontainers so CI needs no compose orchestration.
+
+services:
+  localstack:
+    image: localstack/localstack:2026.07.3
+    container_name: pricing-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      # Since March 2026 LocalStack requires an account even on the free Hobby tier.
+      # Put yours in .env — see .env.example.
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?set LOCALSTACK_AUTH_TOKEN in .env, see .env.example}
+      # `ssm` is not used by the application: CDK's bootstrap stack stores its version
+      # number in an SSM parameter, so leaving it out makes `cdklocal bootstrap` fail
+      # before it ever reaches our stacks.
+      - SERVICES=dynamodb,dynamodbstreams,kinesis,lambda,cloudformation,s3,iam,logs,sts,ssm
+      - DEBUG=${LOCALSTACK_DEBUG:-0}
+      # Java Lambdas are too slow to cold-start inside the default docker executor without
+      # a larger timeout; this keeps LocalStack's own reaper from killing them first.
+      - LAMBDA_DOCKER_NETWORK=pricing-net
+      - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=90
+    volumes:
+      # LocalStack needs the docker socket to run Lambda containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - localstack-data:/var/lib/localstack
+      # The hot-reload bucket mounts the Lambda's build output straight from disk, which
+      # is how the free tier deploys a function without paid asset publishing.
+      - ./lambda/target/scala-3.8.4:/tmp/lambda-artifacts:ro
+    networks:
+      - pricing-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  loyalty-partner:
+    image: wiremock/wiremock:3.13.1
+    container_name: pricing-loyalty-stub
+    # 8081 rather than 8080: the default collides with anything else already bound there.
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./local/wiremock:/home/wiremock:ro
+    networks:
+      - pricing-net
+    command: ["--verbose", "--global-response-templating"]
+
+networks:
+  pricing-net:
+    name: pricing-net
+
+volumes:
+  localstack-data:
