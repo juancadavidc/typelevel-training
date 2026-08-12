@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import weaver.*
 
 import com.kata.pricing.domain.Fixtures.*
+import com.kata.pricing.domain.port.{CouponRepo, CustomerRepo, IdGen, LoyaltyClient, OrderRepo}
 
 /** The whole point of DoD #2, made testable.
   *

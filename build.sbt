@@ -9,6 +9,8 @@ val fs2Version          = "3.13.0"
 val chimneyVersion      = "1.11.0"
 val cirisVersion        = "3.15.0"
 val natchezVersion      = "0.3.10"
+val log4catsVersion     = "2.8.0"
+val slf4jVersion        = "2.0.18"
 val weaverVersion       = "0.13.0"
 val tcVersion           = "0.44.1"
 val awsSdkVersion       = "2.49.6"
@@ -60,7 +62,16 @@ lazy val service = project
       "org.typelevel"                %% "cats-effect"         % catsEffectVersion,
       "io.scalaland"                 %% "chimney"             % chimneyVersion,
       "is.cir"                       %% "ciris"               % cirisVersion,
+      // `natchez-core` is the abstract `Trace[F]`/`Span[F]` API. `natchez-log` is the
+      // local entrypoint that prints spans to the console — enough to demonstrate
+      // propagation without running a collector; swapping it for Datadog is a one-line
+      // change in `Main` because nothing else names a backend.
       "org.tpolecat"                 %% "natchez-core"        % natchezVersion,
+      "org.tpolecat"                 %% "natchez-log"         % natchezVersion,
+      // `natchez-log` writes spans through log4cats; slf4j-simple is the backend that
+      // actually prints them, and is only needed at runtime.
+      "org.typelevel"                %% "log4cats-slf4j"      % log4catsVersion,
+      "org.slf4j"                     % "slf4j-simple"        % slf4jVersion % Runtime,
       "software.amazon.awssdk"        % "dynamodb"            % awsSdkVersion,
       "org.typelevel"                %% "cats-effect-testkit" % catsEffectVersion % Test,
       "com.dimafeng"                 %% "testcontainers-scala-localstack" % tcVersion % Test,

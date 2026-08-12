@@ -17,3 +17,6 @@ cdk/*.d.ts
 # local
 .env
 volume/
+
+# tooling artefacts, not project sources
+.copilot-reviews/

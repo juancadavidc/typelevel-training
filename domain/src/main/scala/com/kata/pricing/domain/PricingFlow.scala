@@ -3,6 +3,7 @@ package com.kata.pricing.domain
 import cats.Monad
 import cats.data.{EitherT, Kleisli}
 import cats.syntax.all.*
+import com.kata.pricing.domain.port.{CouponRepo, CustomerRepo, IdGen, LoyaltyClient, OrderRepo}
 
 import java.time.Instant
 
@@ -26,7 +27,7 @@ object PricingFlow:
 
 /** Steps 1 to 6 of the brief, orchestrated without knowing what runs them.
   *
-  * The algebras arrive through the constructor and the context through `Kleisli` because
+  * The ports arrive through the constructor and the context through `Kleisli` because
   * they have different lifetimes: repos and the HTTP client are built once in the
   * composition root's `Resource`, while `traceId` and `receivedAt` are born and die with
   * each request. A single `Env[F]` holding both would erase that distinction and force
