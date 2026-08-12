@@ -12,11 +12,11 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 | 1 | sbt multi-module skeleton + Smithy model + verify smithy4s codegen generates sources | ✅ done |
 | 2 | Pure domain core: opaque types, enums, BigDecimal money, `Validated` accumulating validation, pricing | ✅ done |
 | 3 | Polymorphic orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | ✅ done — [design](specs/2026-08-07-phase-3-orchestration-design.md) |
-| 4 | chimney transformations DTO ↔ domain ↔ persistence | ⬜ |
-| 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ⬜ |
-| 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ⬜ |
+| 4 | chimney transformations DTO ↔ domain ↔ persistence | ✅ done |
+| 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ✅ done |
+| 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ✅ done |
 | 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ⬜ |
-| 8 | CDK + LocalStack + docker-compose + Makefile | ⬜ |
+| 8 | CDK + LocalStack + docker-compose + Makefile | 🟡 written and synthesising; needs a LocalStack token to deploy |
 | 9 | testcontainers integration tests, then DoD self-review | ⬜ |
 
 ## Definition of Done

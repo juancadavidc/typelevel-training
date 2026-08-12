@@ -84,7 +84,34 @@ sbt domain/test      # a single module
 `-source:future` is enabled in `domain` and `lambda` but **not** `service`: it turns
 `implicit val` into an error and smithy4s 0.19.x codegen still emits it.
 
-The LocalStack flow (`make up && make deploy && make test-integration`) arrives with phases 8–9.
+### The local AWS loop
+
+```bash
+cp .env.example .env   # then set LOCALSTACK_AUTH_TOKEN
+make up                # LocalStack + a WireMock loyalty partner
+make deploy            # cdklocal bootstrap + deploy, then seed the brief's data
+make run-api           # in another shell
+make smoke             # POST the brief's example request
+make down
+```
+
+`make help` lists every target.
+
+**LocalStack needs an account.** The Community edition was retired in March 2026, so even
+the free Hobby tier requires a `LOCALSTACK_AUTH_TOKEN`. Note that Hobby is licensed for
+non-commercial use.
+
+Two things the free tier does not include, and how this repo handles them:
+
+- **ECS/Fargate** is a paid feature. The `FargateService` is written out in full in
+  [`cdk/lib/compute-stack.ts`](cdk/lib/compute-stack.ts) — the brief reviews the CDK as a
+  deliverable — but it is only synthesised with `-c localMode=false`. Locally the API runs
+  from sbt or from the [Dockerfile](Dockerfile) against the same LocalStack endpoint.
+- **CDK asset publishing** is also paid, so `lambda.Code.fromAsset` cannot deploy the
+  Stream Processor. It goes through LocalStack's `hot-reload` bucket instead, which mounts
+  the build directory as the function's code. This is the trap that silently breaks a
+  Lambda deploy: everything synthesises and deploys, and the failure only shows on
+  invocation.
 
 ## Status
 
@@ -93,11 +120,11 @@ The LocalStack flow (`make up && make deploy && make test-integration`) arrives 
 | 1 | sbt skeleton + Smithy model + smithy4s codegen | ✅ |
 | 2 | Pure domain: opaque types, `enum`, `BigDecimal` money, accumulating validation, pricing | ✅ |
 | 3 | Orchestration over `F[_]` with `EitherT`/`Kleisli` + algebras | ✅ |
-| 4 | chimney transformations DTO ↔ domain ↔ persistence | ⬜ |
-| 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ⬜ |
-| 6 | Loyalty client + WireMock + `TestControl` test | ⬜ |
+| 4 | chimney transformations DTO ↔ domain ↔ persistence | ✅ |
+| 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ✅ |
+| 6 | Loyalty client + WireMock + `TestControl` test | ✅ |
 | 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ⬜ |
-| 8 | CDK + LocalStack + docker-compose + Makefile | ⬜ |
+| 8 | CDK + LocalStack + docker-compose + Makefile | 🟡 infra written, not yet deployed |
 | 9 | testcontainers integration tests + DoD self-review | ⬜ |
 
 [docs/ROADMAP.md](docs/ROADMAP.md) is the source of truth, including the Definition of Done

@@ -77,7 +77,14 @@ lazy val service = project
       "com.dimafeng"                 %% "testcontainers-scala-localstack" % tcVersion % Test,
       "org.wiremock"                  % "wiremock"            % wiremockVersion   % Test
     ) ++ weaverDeps,
-    testFrameworks += new TestFramework("weaver.framework.CatsEffect")
+    testFrameworks += new TestFramework("weaver.framework.CatsEffect"),
+    // A fat jar so the Docker runtime stage needs only a JRE. The merge strategy discards
+    // META-INF signatures, which otherwise make the JVM reject the combined jar.
+    assembly / assemblyJarName := "pricing-service-assembly.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case _                        => MergeStrategy.first
+    }
   )
 
 lazy val lambda = project

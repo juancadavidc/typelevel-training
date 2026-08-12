@@ -1,0 +1,25 @@
+{
+  "name": "pricing-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "pricing-cdk": "bin/pricing.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "cdk synth",
+    "deploy:local": "cdklocal deploy --require-approval never"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "aws-cdk": "2.1136.0",
+    "aws-cdk-local": "3.0.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.264.0",
+    "constructs": "10.8.1"
+  }
+}
