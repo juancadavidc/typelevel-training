@@ -65,15 +65,30 @@ object StreamDecoderSuite extends SimpleIOSuite:
     expect(StreamDecoder.decode(record).isLeft)
   }
 
-  /** The decoder is the mirror of `OrderRepoDynamo.put`. If that writer changes its
-    * attribute names, this test is what catches it — otherwise the break only shows up
-    * at runtime in LocalStack, as events that silently stop flowing. */
+  /** The decoder is the mirror of `OrderRepoDynamo.put`. If that writer changes an
+    * attribute name — or its value for a field this test does not otherwise exercise —
+    * this is what catches it, because it compares the whole decoded event structurally
+    * against one built directly from a `PricedOrder`, not just `eventId`.
+    *
+    * `eventId` alone would not do it: `eventIdFor` is a function of orderId + createdAt
+    * ONLY (see `OrderPricedEvent.eventIdFor`), so a test that compared just `eventId`
+    * would stay green even if `total`, `customerId`, `discountAmount`, or `couponApplied`
+    * were decoded wrong — exactly the kind of break (a renamed attribute, say
+    * `discountAmount`) that would fail every record in production while this test kept
+    * passing. `expect(decoded == direct)` compares the full case class, catching any
+    * field regressing silently.
+    *
+    * `==`, not `expect.eql`: `expect.eql` needs a cats `Eq`, and this project defines
+    * none anywhere (see the same reasoning in `StreamProcessorSuite`). Byte-identity of
+    * the whole event is the actual guarantee here, so `==` is the assertion, following
+    * the project's existing convention rather than introducing a new one.
+    */
   pureTest("the decoded event matches what OrderPricedEvent.from produces directly") {
     val record = Fixtures.insertRecord("order-7", "2026-07-22T14:32:00Z", "seq-7")
     val direct = OrderPricedEvent.from(
       com.kata.pricing.domain.Fixtures.pricedOrder("order-7")
     )
     StreamDecoder.decode(record) match
-      case Right(Some(decoded)) => expect.eql(decoded.eventId, direct.eventId)
+      case Right(Some(decoded)) => expect(decoded == direct)
       case other                => failure(s"expected a decoded event, got $other")
   }

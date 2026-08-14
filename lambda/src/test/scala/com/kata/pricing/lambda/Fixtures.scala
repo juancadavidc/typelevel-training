@@ -20,7 +20,17 @@ object Fixtures:
   private def n(value: String): AttributeValue = new AttributeValue().withN(value)
 
   /** Mirrors exactly the attribute map written by
-    * `service/.../dynamo/OrderRepoDynamo.scala`. Keep the two in step. */
+    * `service/.../dynamo/OrderRepoDynamo.scala`. Keep the two in step.
+    *
+    * This is a hand-copy, not a shared constant: `lambda` cannot depend on `service`
+    * (that would drag the whole HTTP/DynamoDB write path onto a Lambda's classpath just
+    * to reuse a map-building helper), so nothing stops this literally drifting from the
+    * writer if someone renames or adds an attribute there and forgets this file. The
+    * closest thing to a safety net is `StreamDecoderSuite`'s "matches what
+    * OrderPricedEvent.from produces directly" test, which at least proves this fixture's
+    * *shape* decodes to the same event the domain layer would build straight from a
+    * `PricedOrder` — it does not, and cannot, prove the fixture matches the real writer.
+    */
   def newImage(
       orderId: String,
       createdAt: String,
@@ -60,6 +70,29 @@ object Fixtures:
     val stream = new StreamRecord()
     stream.setNewImage(newImage(orderId, createdAt, coupon))
     stream.setSequenceNumber(sequenceNumber)
+
+    val record = new DynamodbStreamRecord()
+    record.setEventName("INSERT")
+    record.setDynamodb(stream)
+    record
+
+  /** A record AWS itself can hand us: an `eventName` with no `dynamodb` payload at all
+    * (null, not merely empty). `insertRecord` cannot express this — it always attaches a
+    * `StreamRecord` — so this exists to pin the crash `failuresFrom` used to hit when it
+    * dereferenced `getDynamodb` unguarded. */
+  def malformedRecord(eventName: String = "INSERT"): DynamodbStreamRecord =
+    val record = new DynamodbStreamRecord()
+    record.setEventName(eventName)
+    record
+
+  /** A record with a `dynamodb` payload but no `sequenceNumber` on it — the other half
+    * of the null-guard `failuresFrom` needs, independent of `getDynamodb` itself. */
+  def recordWithoutSequenceNumber(
+      orderId: String,
+      createdAt: String = "2026-07-22T14:32:00Z"
+  ): DynamodbStreamRecord =
+    val stream = new StreamRecord()
+    stream.setNewImage(newImage(orderId, createdAt))
 
     val record = new DynamodbStreamRecord()
     record.setEventName("INSERT")

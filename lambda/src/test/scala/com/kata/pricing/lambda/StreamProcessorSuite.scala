@@ -157,6 +157,34 @@ object StreamProcessorSuite extends SimpleIOSuite:
     yield expect(seen.isEmpty) and expect.eql(result.failedSequenceNumbers, List("seq-1"))
   }
 
+  /** Pins the crash the final review found: a record whose `dynamodb` payload is null
+    * decodes to `Left` (a recoverable failure, per `StreamDecoder`), but `failuresFrom`
+    * used to re-dereference `record.getDynamodb.getSequenceNumber` to build the report —
+    * an NPE on exactly this record. That NPE escaped `handle`'s `F[Boolean]`, so
+    * `process` failed the whole `F`, taking the healthy record in the same batch down
+    * with it. This asserts the mixed batch neither throws nor loses the good record. */
+  test("a record with a null dynamodb payload does not crash the batch and is reported") {
+    val malformed = Fixtures.malformedRecord(eventName = "INSERT")
+    val good      = Fixtures.insertRecord("order-1", sequenceNumber = "seq-1")
+    for
+      (publisher, published) <- Fixtures.recordingPublisher[IO]
+      result <- processorWith(publisher, concurrency = 1).process(List(malformed, good))
+      seen   <- published
+    yield expect.eql(seen.map(_.orderId.value).toList, List("order-1")) and
+      expect.eql(result.failedSequenceNumbers, List("<unknown-sequence-number>", "seq-1"))
+  }
+
+  /** The other half of the same guard: `dynamodb` is present but `sequenceNumber` is
+    * null on it. Same crash shape, different null. */
+  test("a record with a null sequence number does not crash the batch and is reported") {
+    val noSeq = Fixtures.recordWithoutSequenceNumber("order-9")
+    noSeq.getDynamodb.getNewImage.remove("orderId") // force a decode failure => reported
+    for
+      (publisher, _) <- Fixtures.recordingPublisher[IO]
+      result <- processorWith(publisher, concurrency = 1).process(List(noSeq))
+    yield expect.eql(result.failedSequenceNumbers, List("<unknown-sequence-number>"))
+  }
+
   /** Bounded concurrency is a brief requirement, not a detail: an unbounded batch opens
     * as many concurrent Kinesis calls as there are records and earns throttling. */
   test("no more than `concurrency` publishes are ever in flight") {
