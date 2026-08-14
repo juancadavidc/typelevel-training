@@ -24,6 +24,15 @@ class StreamProcessorHandler extends RequestHandler[DynamodbEvent, StreamsEventR
 
   private given IORuntime = IORuntime.global
 
+  /** The `Resource`'s finalizer (the second element of `.allocated`) is deliberately
+    * discarded, not leaked-by-accident: a Lambda container is torn down with SIGKILL,
+    * with no guaranteed shutdown hook in which running it would matter, so there is no
+    * moment in this process's life at which invoking it would be meaningful. The
+    * acquisition itself still goes through `Resource.fromAutoCloseable`
+    * (`KinesisPublisherLive.resource`), so this is not hand-rolled client management —
+    * it is `Resource` used for what it is good at (guaranteed, ordered acquire) in an
+    * environment where its release guarantee has nothing to attach to.
+    */
   private val (processor, _) =
     (for
       config    <- ProcessorConfig.load[IO].toResource
