@@ -358,8 +358,12 @@ object StreamDecoderSuite extends FunSuite:
       case other => failure(s"expected a decoded event, got $other")
   }
 
+  /** `expect(... == ...)` rather than `expect.eql`: `expect.eql` needs a cats `Eq`, and
+    * this project defines none — it compares structurally with `==` everywhere (see
+    * `ValidationSuite`). Adding an `Eq` instance to the pure core solely to satisfy a
+    * test would invent a convention the codebase does not use. */
   pureTest("a REMOVE is skipped, not an error") {
-    expect.eql(StreamDecoder.decode(Fixtures.removeRecord("order-1")), Right(None))
+    expect(StreamDecoder.decode(Fixtures.removeRecord("order-1")) == Right(None))
   }
 
   pureTest("a MODIFY decodes: a re-priced order is still a priced order") {
@@ -731,7 +735,10 @@ object StreamProcessorSuite extends SimpleIOSuite:
       seen <- published
     yield expect.eql(seen.size, 2) and
       expect.eql(seen(0).eventId, seen(1).eventId) and
-      expect.eql(seen(0), seen(1))
+      // `==`, not `expect.eql`: comparing two `OrderPricedEvent`s needs a cats `Eq`,
+      // and this project defines none anywhere. Byte-identity of the whole event is
+      // the actual guarantee here, so the structural comparison is the assertion.
+      expect(seen(0) == seen(1))
   }
 
   test("REMOVE records are ignored and publish nothing") {
