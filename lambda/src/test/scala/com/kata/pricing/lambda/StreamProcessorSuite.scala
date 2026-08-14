@@ -23,8 +23,13 @@ object StreamProcessorSuite extends SimpleIOSuite:
       )
       result <- processorWith(publisher).process(records)
       seen   <- published
+    // Order-independent on purpose: `publish` runs inside `parEvalMap`, so the effects
+    // race and can land in the recording `Ref` in any order — only `parEvalMap`'s
+    // OUTPUT stream is guaranteed ordered, not the side effects that produce it. What
+    // this test actually promises is WHICH records got published, not in what sequence
+    // their publishes completed. Compare as sets so a scheduling change can't flake it.
     yield expect.eql(seen.size, 3) and
-      expect.eql(seen.map(_.orderId.value).toList, List("order-1", "order-2", "order-3")) and
+      expect.eql(seen.map(_.orderId.value).toSet, Set("order-1", "order-2", "order-3")) and
       expect.eql(result.failedSequenceNumbers, Nil)
   }
 
@@ -66,7 +71,11 @@ object StreamProcessorSuite extends SimpleIOSuite:
       )
       _    <- processorWith(publisher).process(records)
       seen <- published
-    yield expect.eql(seen.map(_.orderId.value).toList, List("order-1", "order-3"))
+    // Same reasoning as "every record in the batch is published": `publish` effects
+    // race under `parEvalMap`, so the order they land in the recording `Ref` is not
+    // guaranteed. The intent here is "REMOVE is skipped, the two priced orders are
+    // not" — a set comparison says exactly that without depending on timing.
+    yield expect.eql(seen.map(_.orderId.value).toSet, Set("order-1", "order-3"))
   }
 
   /** Fail fast, and report honestly. The CDK sets `reportBatchItemFailures: true`, so an
