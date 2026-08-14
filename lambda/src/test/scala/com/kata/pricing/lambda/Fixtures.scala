@@ -90,16 +90,25 @@ object Fixtures:
       (publisher, ref.get)
     }
 
-  /** A publisher that fails on the nth event (1-based) and records the rest. */
-  def failingPublisher[F[_]: Sync](
-      failOn: Int,
+  /** A publisher that fails for one named record and records every other event.
+    *
+    * Keyed on `orderId.value` rather than a completion count: under `parEvalMap` with
+    * `concurrency > 1`, publishes race, so "the Nth to complete" does not mean "the Nth
+    * record" — whichever call happens to reach a shared counter second gets the error,
+    * regardless of which record it belongs to. That was the previous fixture's bug:
+    * `failOn = 2` could inject the failure into `order-1` instead of `order-2` if
+    * `order-2`'s publish happened to finish first, silently proving a weaker claim than
+    * the test's assertion implied. Identity is race-proof because it depends only on
+    * the event's own field, never on timing relative to any other publish.
+    */
+  def failingPublisherFor[F[_]: Sync](
+      failOrderId: String,
       error: Throwable
   ): F[(KinesisPublisher[F], F[Vector[OrderPricedEvent]])] =
     Ref[F].of(Vector.empty[OrderPricedEvent]).map { ref =>
       val publisher = new KinesisPublisher[F]:
         def publish(event: OrderPricedEvent): F[Unit] =
-          ref.updateAndGet(_ :+ event).flatMap { seen =>
-            Sync[F].raiseError(error).whenA(seen.size == failOn)
-          }
+          if event.orderId.value == failOrderId then Sync[F].raiseError(error)
+          else ref.update(_ :+ event)
       (publisher, ref.get)
     }

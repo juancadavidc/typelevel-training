@@ -87,12 +87,13 @@ object StreamProcessorSuite extends SimpleIOSuite:
     * concurrent path — the one where `failuresFrom`'s positional correlation across
     * out-of-order completions actually matters. `concurrency = 2` keeps the real
     * `parEvalMap` machinery in play while the failure is still deterministic, because
-    * `failOn` counts completed publishes rather than racing a clock.
+    * `failingPublisherFor` targets a record by identity (`orderId`), not by which
+    * publish happens to complete first — the latter would race under concurrency > 1.
     */
   test("a publish failure reports the failing sequence number and those after it") {
     val boom = new RuntimeException("kinesis is down")
     for
-      (publisher, _) <- Fixtures.failingPublisher[IO](failOn = 2, error = boom)
+      (publisher, _) <- Fixtures.failingPublisherFor[IO](failOrderId = "order-2", error = boom)
       records = List(
         Fixtures.insertRecord("order-1", sequenceNumber = "seq-1"),
         Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
@@ -105,7 +106,7 @@ object StreamProcessorSuite extends SimpleIOSuite:
   test("a failure on the first record reports every sequence number") {
     val boom = new RuntimeException("kinesis is down")
     for
-      (publisher, _) <- Fixtures.failingPublisher[IO](failOn = 1, error = boom)
+      (publisher, _) <- Fixtures.failingPublisherFor[IO](failOrderId = "order-1", error = boom)
       records = List(
         Fixtures.insertRecord("order-1", sequenceNumber = "seq-1"),
         Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
@@ -118,7 +119,7 @@ object StreamProcessorSuite extends SimpleIOSuite:
   test("a failure on the last record reports only that one") {
     val boom = new RuntimeException("kinesis is down")
     for
-      (publisher, _) <- Fixtures.failingPublisher[IO](failOn = 3, error = boom)
+      (publisher, _) <- Fixtures.failingPublisherFor[IO](failOrderId = "order-3", error = boom)
       records = List(
         Fixtures.insertRecord("order-1", sequenceNumber = "seq-1"),
         Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
