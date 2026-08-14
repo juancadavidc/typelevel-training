@@ -34,9 +34,15 @@ object OrderPricedEvent:
     * `OrderStatus` has a single case, `Priced` — an order is priced once. If re-pricing
     * is ever added, this function must take the new version field, or two distinct
     * prices for one order would collapse onto one id. `OrderPricedEventSuite` guards it.
+    *
+    * The hash input is length-prefixed to prevent collisions: `orderId` is an unvalidated
+    * string (any non-blank string is accepted), so two distinct (orderId, createdAt) pairs
+    * could produce the same naive concatenation — e.g., "a|b" + "c" vs. "a" + "|bc". A
+    * collision here means the consumer's deduplication drops one order. Length-prefixing
+    * guarantees the encoding is unambiguous.
     */
   def eventIdFor(orderId: OrderId, createdAt: Instant): String =
-    val payload = s"${orderId.value}|${createdAt.toString}"
+    val payload = s"${orderId.value.length}:${orderId.value}|${createdAt.toString}"
     val digest  = MessageDigest.getInstance("SHA-256").digest(payload.getBytes("UTF-8"))
     digest.map(byte => f"$byte%02x").mkString
 

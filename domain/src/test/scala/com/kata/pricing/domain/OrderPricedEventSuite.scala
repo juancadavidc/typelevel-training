@@ -89,3 +89,19 @@ object OrderPricedEventSuite extends SimpleIOSuite with Checkers:
       event.customerId.value == order.customerId.value
     )
   }
+
+  pureTest("two orderIds that would collide under naive concatenation produce different eventIds") {
+    val timestamp = Instant.parse("2026-08-14T12:00:00Z")
+    // Under naive concatenation (orderId + "|" + timestamp), these would collide:
+    // "a|b" + "|" + "2026..." = "a|b|2026..."
+    // "a" + "|" + "b|2026..." = "a|b|2026..."
+    val id1 = OrderId.unsafe("a|b")
+    val id2 = OrderId.unsafe("a")
+
+    // Length-prefixing makes them unambiguous:
+    // "3:a|b|..." vs "1:a|..."
+    val eventId1 = OrderPricedEvent.eventIdFor(id1, timestamp)
+    val eventId2 = OrderPricedEvent.eventIdFor(id2, timestamp)
+
+    expect(eventId1 != eventId2)
+  }
