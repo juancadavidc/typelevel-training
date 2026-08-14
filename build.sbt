@@ -102,6 +102,9 @@ lazy val lambda = project
       "com.amazonaws"                 % "aws-lambda-java-events" % lambdaEventsVersion
     ) ++ weaverDeps,
     testFrameworks += new TestFramework("weaver.framework.CatsEffect"),
+    // Pinned because `cdk/bin/pricing.ts` names this file for the non-local deploy path.
+    // Without it sbt-assembly appends the version and CDK cannot find the artifact.
+    assembly / assemblyJarName := "stream-processor-assembly.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", _*) => MergeStrategy.discard
       case _                        => MergeStrategy.first
