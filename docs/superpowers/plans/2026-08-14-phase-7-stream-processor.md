@@ -340,12 +340,16 @@ package com.kata.pricing.lambda
 
 import com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue
 import com.kata.pricing.domain.OrderPricedEvent
-import weaver.FunSuite
+import weaver.SimpleIOSuite
 
-/** `FunSuite` with no `Checkers`: every case here is a `pureTest`, since decoding is a
-  * total function and needs no effect runtime.
+/** `SimpleIOSuite`, and every case is a `pureTest` — decoding is a total function, so no
+  * effect runtime is involved despite the suite's name.
+  *
+  * Not `weaver.FunSuite`: verified that it does not provide `pureTest` at all (it is
+  * `BaseIOSuite with Expectations.Helpers`, and `pureTest` lives on `FSuite`). Every
+  * suite in this repo extends `SimpleIOSuite` for the same reason.
   */
-object StreamDecoderSuite extends FunSuite:
+object StreamDecoderSuite extends SimpleIOSuite:
 
   pureTest("an INSERT with a full NEW_IMAGE decodes to an event") {
     val record = Fixtures.insertRecord("order-1", "2026-07-22T14:32:00Z", "seq-1")
