@@ -106,24 +106,37 @@ DynamoDBEvent (batch)
        └─ NEW_IMAGE → decode → PricedOrder   ← a decode failure is an error, not a silent skip
             └─ eventIdFor(orderId, createdAt)
                  └─ parEvalMap(concurrency)(publisher.publish)
-                      └─ compile.drain       ← first error aborts the pipeline
+                      └─ compile.toList      ← every record marked ok / not-ok
                            └─ StreamsEventResponse
-                                empty on success; on abort, the first
-                                unprocessed sequence number ⇒ Lambda retries from there
+                                empty on success; otherwise every sequence number
+                                from the first failure on ⇒ Lambda retries from there
 ```
 
 `partitionKey = orderId` guarantees ordering per order within Kinesis, which is the
 property a price consumer actually needs.
 
-## Error handling: fail fast
+## Error handling: process the batch, report fail-fast
 
-The first publish failure aborts the handler and propagates to Lambda, which retries the
-whole batch. Records already published are republished **identically**, and the consumer
-discards them — exactly the guarantee bought above. No silent loss, and it is the
-semantics Lambda's retry/bisect behaviour expects.
+The pipeline processes every record in the batch, marking each as dealt-with or not. It
+then reports **everything from the first failure onward** as unprocessed, and Lambda
+retries from there. Records already published are republished **identically** and the
+consumer discards them — exactly the guarantee bought above.
 
-Rejected: collecting failures and continuing — it wastes work when Kinesis is down, since
-every record will fail anyway.
+The reporting is fail-fast even though the processing is not, and the asymmetry is
+deliberate. `parEvalMap` keeps several publishes in flight, so records after a failure may
+well have succeeded; reporting them as unprocessed anyway is the safe direction. A
+redundant republish is free — the consumer dedupes on `eventId` — whereas an unreported
+failure is an order nobody is ever told about.
+
+Aborting the stream on the first error was the original design and was rejected once the
+`reportBatchItemFailures` contract below became clear: an exception propagating out of
+`parEvalMap` loses the sequence number the report has to name. Accurate reporting and
+early abort are in tension, and accurate reporting wins. Continuing also lets a decode
+failure be reported rather than silently dropped.
+
+The cost, stated plainly: when Kinesis is down, a batch of ten makes ten doomed calls
+instead of one. Bounded concurrency caps the blast radius, and Lambda's `retryAttempts: 3`
+bounds the repetition.
 
 ### The `reportBatchItemFailures` conflict
 
@@ -132,24 +145,23 @@ source, written in phase 8 before this design existed. That flag changes the con
 Lambda now reads the handler's **return value** to decide what to retry, and a handler
 returning `void`/`null` is read as *"the whole batch succeeded"*.
 
-Combined with fail-fast, that silently loses data: the pipeline aborts on record *k*,
-records *k…n* were never published, and Lambda — seeing no reported failures — advances
-the iterator past all of them. With `retryAttempts: 3` this is not even a loud failure; it
-is a quiet gap in the event stream.
+A handler that returned `void` here would silently lose data: records that failed to
+publish would go unreported, and Lambda — seeing no failures — would advance the iterator
+past them. With `retryAttempts: 3` this is not even a loud failure; it is a quiet gap in
+the event stream.
 
 Two ways out, and we take the first:
 
-1. **Keep fail-fast; make the response honest.** `handleRequest` returns a
-   `StreamsEventResponse`. On success: an empty failure list. On abort: the sequence
-   number of the *first* unprocessed record, which tells Lambda to retry from there. The
-   pipeline stays a fail-fast `compile.drain`; only the handler's reporting changes.
+1. **Make the response honest.** `handleRequest` returns a `StreamsEventResponse`. On a
+   fully successful batch: an empty failure list. Otherwise: every sequence number from
+   the first failure onward, which tells Lambda to retry from there.
 2. Remove the flag from the CDK and return `void`. Simpler code, but it throws away a
    correct-by-default setting the infra already has, and a full-batch retry redoes work
    that succeeded.
 
-Option 1 costs one extra test — *an abort reports the first unprocessed sequence number,
-not an empty list* — and keeps the deterministic-dedup guarantee doing its job: the
-retried records republish identically and the consumer discards the duplicates.
+Option 1 costs one extra test — *a failed batch reports the first unprocessed sequence
+number, not an empty list* — and keeps the deterministic-dedup guarantee doing its job:
+the retried records republish identically and the consumer discards the duplicates.
 
 ## Testing
 
@@ -167,10 +179,11 @@ retried records republish identically and the consumer discards the duplicates.
 - **the same record processed twice produces two events with an identical `eventId`** —
   the test that backs DoD #4 and the one to defend in review.
 - `REMOVE` records are ignored; a batch of only `REMOVE`s publishes nothing.
-- a publisher failure on record *k* aborts the batch and propagates the error.
+- a publisher failure on record *k* is reported, not swallowed.
 - a successful batch reports an **empty** failure list.
-- an aborted batch reports the **first unprocessed sequence number**, not an empty list —
+- a failed batch reports the **first unprocessed sequence number**, not an empty list —
   the test that stops `reportBatchItemFailures` from silently swallowing lost records.
+- an undecodable record is reported as a failure, never dropped.
 - bounded concurrency: an instrumented publisher asserts in-flight publishes never exceed
   the configured limit.
 
