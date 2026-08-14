@@ -39,7 +39,17 @@ final class StreamProcessor[F[_]: Async](
 
   /** One record's outcome: `true` when it is safely dealt with — published, or correctly
     * skipped. A decode error and a publish error are both `false`; neither may be
-    * reported as success. */
+    * reported as success.
+    *
+    * `handleError` here only ever sees the errors cats-effect's fiber runloop routes
+    * through the normal channel — which excludes fatal `Throwable`s (`VirtualMachineError`,
+    * `LinkageError`, ...). That is left alone deliberately, not by accident: a JVM that
+    * just OOM'd or blew its stack is in a state where continuing to process the batch and
+    * reporting a tidy failure list is the wrong answer. Catching it here would keep the
+    * fiber "succeeding" its way through a corrupted runtime. Letting it escape kills the
+    * Lambda invocation outright, and the platform's own timeout plus `retryAttempts: 3`
+    * is what should handle that — not application code pretending it degraded gracefully.
+    */
   private def handle(record: DynamodbStreamRecord): F[Boolean] =
     StreamDecoder.decode(record) match
       case Left(_)          => Async[F].pure(false)

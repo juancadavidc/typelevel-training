@@ -71,7 +71,15 @@ object StreamProcessorSuite extends SimpleIOSuite:
 
   /** Fail fast, and report honestly. The CDK sets `reportBatchItemFailures: true`, so an
     * empty failure list means "all succeeded" — returning that after an abort would tell
-    * Lambda to advance past records that were never published. */
+    * Lambda to advance past records that were never published.
+    *
+    * `concurrency = 1` degenerates `parEvalMap` to `evalMap` (fs2 3.13.0,
+    * `Stream.scala:2306`), which is strictly sequential and never exercises the
+    * concurrent path — the one where `failuresFrom`'s positional correlation across
+    * out-of-order completions actually matters. `concurrency = 2` keeps the real
+    * `parEvalMap` machinery in play while the failure is still deterministic, because
+    * `failOn` counts completed publishes rather than racing a clock.
+    */
   test("a publish failure reports the failing sequence number and those after it") {
     val boom = new RuntimeException("kinesis is down")
     for
@@ -81,9 +89,41 @@ object StreamProcessorSuite extends SimpleIOSuite:
         Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
         Fixtures.insertRecord("order-3", sequenceNumber = "seq-3")
       )
+      result <- processorWith(publisher, concurrency = 2).process(records)
+    yield expect.eql(result.failedSequenceNumbers, List("seq-2", "seq-3"))
+  }
+
+  test("a failure on the first record reports every sequence number") {
+    val boom = new RuntimeException("kinesis is down")
+    for
+      (publisher, _) <- Fixtures.failingPublisher[IO](failOn = 1, error = boom)
+      records = List(
+        Fixtures.insertRecord("order-1", sequenceNumber = "seq-1"),
+        Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
+        Fixtures.insertRecord("order-3", sequenceNumber = "seq-3")
+      )
       result <- processorWith(publisher, concurrency = 1).process(records)
-    yield expect(result.failedSequenceNumbers.nonEmpty) and
-      expect.eql(result.failedSequenceNumbers.head, "seq-2")
+    yield expect.eql(result.failedSequenceNumbers, List("seq-1", "seq-2", "seq-3"))
+  }
+
+  test("a failure on the last record reports only that one") {
+    val boom = new RuntimeException("kinesis is down")
+    for
+      (publisher, _) <- Fixtures.failingPublisher[IO](failOn = 3, error = boom)
+      records = List(
+        Fixtures.insertRecord("order-1", sequenceNumber = "seq-1"),
+        Fixtures.insertRecord("order-2", sequenceNumber = "seq-2"),
+        Fixtures.insertRecord("order-3", sequenceNumber = "seq-3")
+      )
+      result <- processorWith(publisher, concurrency = 1).process(records)
+    yield expect.eql(result.failedSequenceNumbers, List("seq-3"))
+  }
+
+  test("an empty batch reports no failures") {
+    for
+      (publisher, _) <- Fixtures.recordingPublisher[IO]
+      result <- processorWith(publisher).process(Nil)
+    yield expect.eql(result.failedSequenceNumbers, Nil)
   }
 
   test("a successful batch reports no failures") {
