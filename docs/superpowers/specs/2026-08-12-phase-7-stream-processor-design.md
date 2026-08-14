@@ -195,3 +195,27 @@ real interpreter is exercised against LocalStack in phase 9, which is where that
 Stream name, region and the LocalStack endpoint override load through **ciris**, matching
 phase 5 — no bare `sys.env(...)`. Publish concurrency is configuration with a default, not
 a literal buried in the pipeline.
+
+## Known gaps, deliberately deferred
+
+Recorded here rather than lost with the scratch workspace. All were reviewed and ruled
+acceptable to defer; none blocks the phase.
+
+- **`Fixtures.newImage` is a hand-copy of `OrderRepoDynamo.put`'s attribute map.** The
+  decoder/writer coupling is now guarded by a structural comparison, but the fixture
+  itself can still drift from the writer, because `lambda` cannot depend on `service`.
+  Closing it properly would need shared schema constants in `domain`.
+- **`StreamProcessorHandler` has no test coverage.** The `ProcessResult` →
+  `BatchItemFailure` translation is the one hand-off Lambda actually reads, and nothing
+  asserts it. Hard to unit-test because the constructor eagerly allocates the AWS client;
+  extracting the pure translation would fix both.
+- **`ProcessorConfig`'s `region` and `endpointOverride` are untested** — the two fields
+  that actually differ between LocalStack and a real account. A `ConfigValue` test over
+  explicit map-backed sources would cover them.
+- **`payload`'s numeric and structural output is unasserted.** Escaping and the `null`
+  coupon are pinned; nothing parses the result as JSON or checks that `Money` renders as
+  a bare number.
+- **An unrecognised `eventName` is skipped rather than reported.** Streams emits only
+  INSERT/MODIFY/REMOVE today, so skipping an unknown future verb is the safer default.
+- **`putRecord` per event rather than `putRecords`.** Correct at `batchSize: 10`; the
+  batch API would additionally require inspecting its partial-failure response.
