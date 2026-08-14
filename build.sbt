@@ -89,7 +89,7 @@ lazy val service = project
 
 lazy val lambda = project
   .in(file("lambda"))
-  .dependsOn(domain)
+  .dependsOn(domain % "compile->compile;test->test")
   .settings(
     name := "stream-processor",
     scalacOptions ++= futureSource,
