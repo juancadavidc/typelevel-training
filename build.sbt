@@ -96,6 +96,7 @@ lazy val lambda = project
     libraryDependencies ++= Seq(
       "co.fs2"                       %% "fs2-core"               % fs2Version,
       "org.typelevel"                %% "cats-effect"            % catsEffectVersion,
+      "is.cir"                       %% "ciris"                  % cirisVersion,
       "software.amazon.awssdk"        % "kinesis"                % awsSdkVersion,
       "software.amazon.awssdk"        % "dynamodb"               % awsSdkVersion,
       "com.amazonaws"                 % "aws-lambda-java-core"   % lambdaCoreVersion,
