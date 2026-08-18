@@ -17,7 +17,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ✅ done |
 | 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ✅ done — [design](superpowers/specs/2026-08-12-phase-7-stream-processor-design.md) |
 | 8 | CDK + LocalStack + docker-compose + Makefile | ✅ done — deployed and verified end to end; see [what actually landed](#phase-8--what-actually-landed) |
-| 9 | testcontainers integration tests, then DoD self-review | ⬜ |
+| 9 | testcontainers integration tests, then DoD self-review | 🟡 suite done — [design](superpowers/specs/2026-08-18-phase-9-integration-design.md); DoD self-review outstanding |
 
 ## Definition of Done
 
@@ -26,13 +26,13 @@ Straight from the spec — this is the review checklist.
 | # | Requirement | Status | Where |
 |---|---|---|---|
 | 1 | Pure core has zero imports of `IO`, http4s or the DynamoDB SDK; testable with no effect runtime | ✅ | `domain/` depends only on `cats-core`; verified by the grep below |
-| 2 | Business logic polymorphic over `F[_]` via `EitherT`/`Kleisli`, interpreted to `IO` only at the composition root | ✅ half | `PricingFlow[F]` landed in phase 3; the `IO` interpretation is phase 5 |
-| 3 | All DTO/domain/persistence transformations go through chimney; custom mappings are deliberate | ⬜ | phase 4 |
+| 2 | Business logic polymorphic over `F[_]` via `EitherT`/`Kleisli`, interpreted to `IO` only at the composition root | ✅ | `PricingFlow[F]` in phase 3; `IO` is named only in `Main` and `Tracing` (the composition root), where `type App = Kleisli[IO, Span[IO], *]` is chosen once |
+| 3 | All DTO/domain/persistence transformations go through chimney; custom mappings are deliberate | ✅ | `service/.../rest/Transformations.scala`, landed in phase 4 |
 | 4 | Order write + event emission — **see the contradiction below** | ✅ | CDC via Streams; `StreamProcessor` + deterministic `eventId` |
 | 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ✅ | `KinesisPublisherLive.resource`, phase 5 for DynamoDB |
-| 6 | At least one weaver test drives cats-effect's time control (`TestControl`) over the partner timeout/retry | ⬜ | phase 6 |
+| 6 | At least one weaver test drives cats-effect's time control (`TestControl`) over the partner timeout/retry | ✅ | `LoyaltyTimeoutSuite` advances a virtual clock; phase 9's suite deliberately does *not* use it — see below |
 | 7 | IDs use opaque types, domain ADTs use `enum`, no `var`, no shared mutable state | ✅ domain | must hold in `service`/`lambda` too |
-| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | 🟡 | `up` and `deploy` verified by running them; `test-integration` has no suite yet — phase 9 |
+| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | ✅ | all three verified by running them; `test-integration` runs `sbt it/test` — 6 tests against a testcontainers LocalStack |
 
 ### Verifying DoD #1
 
@@ -154,6 +154,73 @@ invokes the deployed function. That is the argument for phase 9 doing more than 
 Verified end to end after the fixes — `POST /orders/price` → Orders table → stream →
 Lambda → Kinesis, one record, `partitionKey` the `orderId`, deterministic `eventId`, and
 `Money` rendered as bare JSON numbers.
+
+## Phase 9 — what actually landed
+
+The suite lives in a new `it` module ([design](superpowers/specs/2026-08-18-phase-9-integration-design.md)),
+and `make test-integration` — which previously ran `sbt "service/testOnly *IntegrationSuite"`,
+matched nothing and **exited green** — now runs `sbt it/test`.
+
+### The gap it closes, demonstrated rather than asserted
+
+`OrderRepoDynamo` writes with the SDK v2 `AttributeValue`; `StreamDecoder` reads the v1
+POJO the Lambda runtime supplies. These are unrelated classes and nothing in the type
+system connects them — the contract is a set of attribute-name strings.
+
+Renaming `discountAmount` in `OrderRepoDynamo` was tried, deliberately, before the suite
+was declared done:
+
+- **All 76 unit tests still passed.** `service` suites never see the decoder, `lambda`
+  suites never see the repo, and `StreamDecoderSuite` hand-builds the POJOs it asserts
+  against — so it tests the decoder against itself.
+- **The integration suite failed**, naming the cause: *"the writer's attributes did not
+  decode: missing numeric attribute 'discountAmount' — OrderRepoDynamo and StreamDecoder
+  have drifted apart"*.
+
+That is the phase's whole justification, and it is reproducible rather than argued.
+
+### Two bugs the first run found
+
+Both were in the suite, and both are the kind that make integration tests untrustworthy:
+
+1. **Tests read each other's records.** A shard iterator opened at TRIM_HORIZON replays the
+   whole stream, so "wait for one record" returned the *oldest* order rather than the one
+   the test just wrote. Fixed by selecting records on the `orderId` the service returned
+   (`collectFor`), which makes the tests independent of execution order and safe to re-run
+   against a stream that already holds data. Verified by passing with `maxParallelism = 4`.
+2. **Every Kinesis publish failed silently.** `KinesisPublisherLive` is production code and
+   resolves credentials from the default AWS chain, exactly as the deployed Lambda does —
+   and `StreamProcessor` catches publish failures by design, so the symptom was an empty
+   stream and a 60-second timeout that never mentioned credentials. The suite now checks
+   for them at startup and fails with that explanation instead.
+
+### Decisions worth defending
+
+- **The suite does not run under `sbt test`.** The brief says "via the normal test task in
+  CI"; `make test` promises "no Docker, no LocalStack". The promise won: `it` is not
+  aggregated by `root`, so `sbt test` cannot build it — verified by deleting `it/target`
+  and confirming `sbt test` never recreates it. In CI, `make test-integration` is one line.
+- **`test->compile`, not `compile->compile`.** `it` has no `src/main`, so the
+  `service`↔`lambda` edge exists only on the test classpath. Production still deploys two
+  artifacts that cannot reach each other, and that is enforced by the build rather than
+  promised in a comment.
+- **`TestControl` is deliberately absent.** DoD #6 is met by `LoyaltyTimeoutSuite`, where
+  time is logical and controllable. Here time belongs to a real container; substituting
+  virtual time would test nothing. Two tools, two problems, easily mistaken for one.
+- **No `IO.sleep` with a constant, anywhere.** Every wait is bounded polling that returns
+  as soon as the data lands and fails with a message naming what was expected.
+- **The v2→v1 bridge is purely structural**, and that rule is enforced by
+  `StreamRecordBridgeSuite` rather than by its scaladoc: the bridge stands in for the AWS
+  runtime, so a bridge that knew domain field names could hide the very mismatch the suite
+  exists to catch. Its executable code contains no string literals at all.
+
+### What it still does not cover
+
+Stated as a decision, not an oversight: the suite runs `StreamProcessor` in-process off
+sbt's classpath, so the phase 8 `META-INF/services` packaging failure would still slip
+through, and infrastructure is created by SDK calls rather than CDK. Those are what
+`make up && make deploy` cover — which is why all three commands earn their place in the
+DoD #8 chain rather than the third one subsuming the first two.
 
 ## The `createdAt` wire format — the same blind spot, one level up
 

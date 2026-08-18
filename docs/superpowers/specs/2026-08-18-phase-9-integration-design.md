@@ -52,29 +52,30 @@ A new `it` module, deliberately **not** aggregated by `root`:
 ```scala
 lazy val it = project
   .in(file("it"))
-  .dependsOn(service % "test->compile", lambda % "test->compile", domain % "test->test")
+  .dependsOn(service % "test->compile", lambda % "test->compile")
   .settings(
     name           := "pricing-integration",
     publish / skip := true,
+    scalacOptions ++= futureSource,
     libraryDependencies ++= Seq(
       "com.dimafeng" %% "testcontainers-scala-localstack" % tcVersion       % Test,
-      "org.wiremock"  % "wiremock"                        % wiremockVersion % Test
+      "org.wiremock"  % "wiremock"                        % wiremockVersion % Test,
+      "org.slf4j"     % "slf4j-simple"                    % slf4jVersion    % Test
     ) ++ weaverDeps,
     testFrameworks += new TestFramework("weaver.framework.CatsEffect")
   )
 ```
+
+**As built, `domain % "test->test"` was dropped.** The suite asserts the brief's worked
+example — fixed, published numbers — rather than generated data, so it never reaches for
+the ScalaCheck generators. `domain`'s types arrive transitively through `service` and
+`lambda`. Declaring the edge anyway would advertise a coupling that does not exist.
 
 **`test->compile`, not `compile->compile`.** The module has no `src/main` — only `it/src/test`. So
 the `service`↔`lambda` edge exists solely on the test classpath. This matters because it is the
 review question this layout invites: *why do the producer and the consumer share a classpath when
 production deploys them as two separate artifacts?* The answer is not a promise, it is the build:
 nothing in `compile` scope can reach across, because `it` has no compile scope.
-
-**`domain % "test->test"`** for the ScalaCheck generators and fixtures under `domain/src/test`.
-Note `test->test` does *not* transitively bring `domain/src/main`; that arrives via `service` and
-`lambda`, which both `dependsOn(domain)`. The same idiom is already in `build.sbt` on
-`lambda.dependsOn(domain % "compile->compile;test->test")` — this follows the existing pattern
-rather than inventing one.
 
 **Not aggregated.** If `root` aggregated `it`, `sbt test` would start Docker. Leaving it out is
 what makes the deviation above hold structurally instead of by convention.
@@ -106,8 +107,12 @@ POST /orders/price (http4s routes)
 ### The type bridge, and the rule that keeps it honest
 
 `StreamProcessor.process` takes `List[DynamodbStreamRecord]` because in production the Lambda
-runtime hands it those. The suite reads the stream with the v2 SDK, which returns
-`software.amazon.awssdk.services.dynamodbstreams.model.Record`. Something has to convert.
+runtime hands it those. The suite reads the stream with the v2 SDK, which returns a `Record` of its own. Note the
+package: there is **no** `software.amazon.awssdk:dynamodbstreams` artifact — the Streams
+client ships inside the `dynamodb` artifact as
+`software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsAsyncClient`, with its
+models in `...services.dynamodb.model`. So no new dependency is needed. Something has to
+convert.
 
 That converter is **test code standing in for AWS's runtime**, which makes it the one genuinely
 dangerous piece of this phase: write it wrong — say, spelling an attribute name correctly that the
@@ -117,6 +122,12 @@ repo spells wrong — and the suite goes green over a broken system.
 `NEW_IMAGE` map attribute by attribute, and it knows no domain field names. If the string
 `"orderId"` appears anywhere in `StreamRecordBridge.scala`, it is written wrong. Its scaladoc says
 so, because a rule that only exists in a design doc is not a rule.
+
+**As built, the rule is also executable.** `StreamRecordBridgeSuite` reads the bridge's source and
+fails if any domain attribute name appears in its non-comment lines — and, more strictly, if *any*
+string literal does, since every literal would be either a field name or a substituted value. A rule
+enforced only by a scaladoc survives until the first person in a hurry. Verified by injecting a
+violation and watching both assertions fire.
 
 ## The suite
 
@@ -130,9 +141,17 @@ Composed as one `Resource` — DoD #5 applied to test code as well as production
 per test would quadruple a ~15 s startup and buy no isolation that data isolation does not already
 give.
 
-**Isolation comes from data, not containers.** Each test derives its own `orderId`/`customerId`
-from the test name, so the tests share a table and a stream without interfering. No
-truncate-between-tests, which is the fragile pattern this replaces.
+**Isolation comes from data, not containers.** No truncate-between-tests, which is the fragile
+pattern this replaces.
+
+**As built, the mechanism is stronger than "an id per test", and the first run proved it had to
+be.** A shard iterator opens at TRIM_HORIZON — the *beginning* of the stream — so every test
+replays every order written before it, and "wait for one record" returns the oldest rather than the
+one under test. Deriving distinct ids is not enough on its own; the reader has to *select* on them.
+Each test therefore waits for records carrying the `orderId` its own write produced
+(`StreamReader.collectFor`). That also makes the suite re-runnable against a stream that already
+holds data, and independent of execution order — verified by passing with `maxParallelism = 4`
+before it was set back to 1 for legible failures.
 
 Infra is created by the suite via the SDK: `CreateTable` with `StreamSpecification` NEW_IMAGE, and
 `CreateStream`. WireMock stubs the loyalty partner, reusing the mappings already in
@@ -167,6 +186,24 @@ is already met by `LoyaltyTimeoutSuite`, where time is logical and controllable.
 to a real container. Substituting virtual time would mean testing nothing. Two tools, two problems,
 easily mistaken for one.
 
+## Two environment facts the first run turned up
+
+Neither is in the brief, and both silently break the suite:
+
+- **The container needs `LOCALSTACK_AUTH_TOKEN`.** LocalStack has required an account since March
+  2026, and testcontainers — unlike docker compose — does not read `.env`. The image is also pinned
+  to `localstack/localstack:2026.07.3` to match `docker-compose.yml` rather than the
+  `testcontainers-scala` default (4.0.3): testing against a different LocalStack build than the
+  manual loop deploys to is exactly the discrepancy an integration suite exists to rule out.
+- **`KinesisPublisherLive` needs ambient AWS credentials.** It is production code and resolves them
+  from the default provider chain, precisely as the deployed Lambda does. Without them every publish
+  fails — and because `StreamProcessor` converts publish failures into a reported sequence number
+  rather than an exception (correct for production), the symptom is an empty Kinesis stream and a
+  timeout that never mentions credentials. `LocalStackResource` now checks for them at startup and
+  fails with that explanation, and `make test-integration` exports them. Deliberately *not* fixed by
+  setting the properties from inside the suite: that would paper over the environment contract this
+  suite exists to verify.
+
 ## Known limits
 
 Stated as a decision, not an oversight:
@@ -188,15 +225,25 @@ what the third deliberately does not.
 
 | File | State |
 |---|---|
-| `build.sbt` | modified — the `it` module, unaggregated |
-| `Makefile` | modified — `test-integration` → `sbt it/test` |
+| `build.sbt` | modified — the `it` module, unaggregated; testcontainers moved off `service` |
+| `Makefile` | modified — `test-integration` → `sbt it/test`, sourcing `.env` |
 | `it/src/test/.../IntegrationSuite.scala` | new — the four tests |
 | `it/src/test/.../StreamRecordBridge.scala` | new — the structural v2→v1 bridge |
-| `it/src/test/.../LocalStackResource.scala` | new — container, clients, infra, WireMock |
+| `it/src/test/.../StreamRecordBridgeSuite.scala` | new — enforces the bridge rule as a test |
+| `it/src/test/.../LocalStackResource.scala` | new — container, clients, infra, seed, WireMock |
+| `it/src/test/.../StreamReader.scala` | new — shard cursors that advance, and select by `orderId` |
+| `it/src/test/.../Polling.scala` | new — bounded polling; the no-constant-sleep rule |
+| `it/src/test/resources/simplelogger.properties` | new — quiets ~40 lines/run of container narration |
 | `docs/ROADMAP.md` | modified — phase 9 status and the stale DoD rows |
 
-No changes to `domain`, `service` or `lambda`. If the suite required production code to change in
-order to be testable, that would be a signal the suite is designed wrong.
+`StreamReader` and `Polling` were not in the original file list: both exist because the first run
+failed. `Polling` is where the "no `IO.sleep` with a constant" rule is implemented rather than
+merely stated, and `StreamReader` is where the shard-iterator cursor is advanced and filtered —
+the two places this kind of suite actually rots.
+
+No changes to `domain`, `service` or `lambda` — verified by `git diff --stat`, which touches only
+`build.sbt`, `Makefile` and docs. If the suite had required production code to change in order to
+be testable, that would be a signal the suite is designed wrong.
 
 ## Out of scope
 
