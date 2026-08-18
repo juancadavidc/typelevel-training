@@ -15,7 +15,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 | 4 | chimney transformations DTO ↔ domain ↔ persistence | ✅ done |
 | 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ✅ done |
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ✅ done |
-| 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ⬜ |
+| 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ✅ done — [design](superpowers/specs/2026-08-12-phase-7-stream-processor-design.md) |
 | 8 | CDK + LocalStack + docker-compose + Makefile | 🟡 written and synthesising; needs a LocalStack token to deploy |
 | 9 | testcontainers integration tests, then DoD self-review | ⬜ |
 
@@ -28,8 +28,8 @@ Straight from the spec — this is the review checklist.
 | 1 | Pure core has zero imports of `IO`, http4s or the DynamoDB SDK; testable with no effect runtime | ✅ | `domain/` depends only on `cats-core`; verified by the grep below |
 | 2 | Business logic polymorphic over `F[_]` via `EitherT`/`Kleisli`, interpreted to `IO` only at the composition root | ✅ half | `PricingFlow[F]` landed in phase 3; the `IO` interpretation is phase 5 |
 | 3 | All DTO/domain/persistence transformations go through chimney; custom mappings are deliberate | ⬜ | phase 4 |
-| 4 | Order write + event emission — **see the contradiction below** | ⬜ | phase 7 |
-| 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ⬜ | phase 5 + 7 |
+| 4 | Order write + event emission — **see the contradiction below** | ✅ | CDC via Streams; `StreamProcessor` + deterministic `eventId` |
+| 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ✅ | `KinesisPublisherLive.resource`, phase 5 for DynamoDB |
 | 6 | At least one weaver test drives cats-effect's time control (`TestControl`) over the partner timeout/retry | ⬜ | phase 6 |
 | 7 | IDs use opaque types, domain ADTs use `enum`, no `var`, no shared mutable state | ✅ domain | must hold in `service`/`lambda` too |
 | 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | ⬜ | phase 8 + 9 |

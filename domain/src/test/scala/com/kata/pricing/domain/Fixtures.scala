@@ -77,3 +77,26 @@ object Fixtures:
       lines  <- linesGen
       coupon <- couponGen
     yield ValidOrder(customer(tier), lines, coupon)
+
+  def pricedOrder(
+      orderId: String = "order-1",
+      createdAt: Instant = now
+  ): PricedOrder =
+    PricedOrder(
+      orderId = OrderId.unsafe(orderId),
+      customerId = CustomerId.unsafe("cust-123"),
+      status = OrderStatus.Priced,
+      lines = NonEmptyList.of(
+        PricedLine(
+          Sku.unsafe("SKU-001"),
+          Quantity.unsafe(2),
+          Money(BigDecimal("19.99")),
+          Money(BigDecimal("39.98"))
+        )
+      ),
+      subtotal = Money(BigDecimal("39.98")),
+      discountAmount = Money(BigDecimal("3.99")),
+      total = Money(BigDecimal("35.99")),
+      couponApplied = Some(CouponCode.unsafe("SUMMER10")),
+      createdAt = createdAt
+    )
