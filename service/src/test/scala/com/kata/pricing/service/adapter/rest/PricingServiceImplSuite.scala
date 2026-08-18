@@ -82,6 +82,26 @@ object PricingServiceImplSuite extends SimpleIOSuite:
       }
   }
 
+  /** Deterministic despite reading the real clock, which is the reason to assert it this
+    * way: whatever the wall time is, truncation makes the sub-second field zero. Pinning a
+    * fixed `Clock` instead would only prove that a fixed instant survives the flow — it
+    * could not fail if the truncation were removed.
+    *
+    * The brief pins `"2026-07-22T14:32:00Z"`, whole seconds. `ContractWireFormatSuite`
+    * asserts the rendering of a timestamp; this asserts that the timestamp the service
+    * produces is one that renders that way at all.
+    */
+  test("createdAt is whole seconds, as the brief's example response shows") {
+    service()
+      .priceOrder(api.CustomerId("cust-123"), twoItems, None)
+      .map { response =>
+        val instant = response.createdAt.toInstant
+        expect(instant.getNano == 0) and
+          expect(instant.toString.endsWith("Z")) and
+          expect(!instant.toString.contains("."))
+      }
+  }
+
   test("an unknown sku becomes the contract's 422, not a 500") {
     service()
       .priceOrder(api.CustomerId("cust-123"), List(api.OrderItemInput("SKU-999", 1)), None)

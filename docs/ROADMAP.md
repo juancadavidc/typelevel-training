@@ -155,13 +155,6 @@ Verified end to end after the fixes — `POST /orders/price` → Orders table �
 Lambda → Kinesis, one record, `partitionKey` the `orderId`, deterministic `eventId`, and
 `Money` rendered as bare JSON numbers.
 
-Carried into phase 9, spotted in the smoke output and deliberately not fixed here because
-it is a business question, not a packaging one:
-
-- `discountAmount` is `13.48`, not the `8.99` the brief pins: the GOLD loyalty perk stacks
-  on top of the coupon (`8.99 + 4.49`, each rounded down). Needs a decision on whether the
-  brief's worked example assumes no perk before an integration test can assert numbers.
-
 ## The `createdAt` wire format — the same blind spot, one level up
 
 Also found in that smoke output and fixed on the same branch, because it turned out to be
@@ -195,6 +188,57 @@ way is not one.
 This is the second instance in one sitting of the same shape: the deployed artifact and the
 serialized bytes are each a failure domain that model-level tests cannot reach. That, not
 "more coverage", is the argument for what phase 9 has to exercise.
+
+## The brief is the specification
+
+Two more disagreements between that smoke output and the brief. Both were settled by the
+same ruling — **the brief is the spec** — and neither was a defect in the code that computes
+the answer. Worth having ready, because "the code is right and the output is still wrong"
+is the kind of thing a reviewer probes.
+
+### `discountAmount` was `13.48`, not the `8.99` the brief pins
+
+A **fixtures** problem, and the reasoning matters more than the fix. The perk stacked on top
+of the coupon (`8.99 + 4.49`, each rounded down), which is exactly what `Pricing.price` says
+it does. Three facts settle whether that is wrong:
+
+- The brief's step 3 is an *"(Optional partner check)"* and never states a numeric effect
+  for the perk.
+- The brief never says `cust-123` is GOLD, or that it has a perk at all.
+- The brief's worked example is exactly 10% of `89.97` floored — the coupon alone.
+
+So the example assumes no perk, and reproducing it means seeding the example customer
+without one. Making perks *not* stack would be inventing a business rule to explain a
+number, against the brief's explicit *"Resist adding more business rules"* — and it would be
+the wrong rule, since nothing states it. `Pricing.price` is untouched.
+
+The perk moved to a new `cust-789`, same GOLD tier and same coupon, so brief step 3 stays
+demonstrable by hand and the two customers together *show* the stacking rule: `8.99` for
+`cust-123`, `13.48` for `cust-789`. `cust-123` stays GOLD because SUMMER10 only stacks with
+SILVER and GOLD — a BASIC tier there would reject the very coupon the example applies.
+
+### `createdAt` had sub-second precision
+
+Distinct from the wire-format defect above and found by fixing it: once the field rendered
+as ISO-8601 it read `"2026-08-18T17:20:33.414702Z"`, where the brief's example is
+`"2026-07-22T14:32:00Z"`. The clock read at the edge is now truncated to
+`ChronoUnit.SECONDS`.
+
+Truncated at the edge rather than in the encoder, because `requestContext` is the one place
+the timestamp enters the system: the same `Instant` reaches the response, the Orders item
+and — through the stream processor's `eventId` derivation — the event's idempotency key.
+Truncating in the encoder would have made the response disagree with the row it claims to
+describe, and left the `eventId` derived from a value nobody can read back. Verified on the
+running stack: response, DynamoDB item and Kinesis event all carry the same
+`2026-08-18T17:34:42Z`.
+
+The test for it reads the *real* clock and asserts the nanosecond field is zero — which is
+deterministic precisely because truncation is what makes it so. Pinning a fixed `Clock`
+would only have proved that a fixed instant survives the flow, and could not fail if the
+truncation were removed. Confirmed to go red without it.
+
+`make smoke` now reproduces the brief's example response exactly, `orderId` and `createdAt`
+aside. That is the precondition for phase 9's integration test asserting numbers at all.
 
 ## Open decisions to defend in review
 
