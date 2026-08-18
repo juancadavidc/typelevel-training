@@ -83,7 +83,8 @@ lazy val service = project
       "org.slf4j"                     % "slf4j-simple"        % slf4jVersion % Runtime,
       "software.amazon.awssdk"        % "dynamodb"            % awsSdkVersion,
       "org.typelevel"                %% "cats-effect-testkit" % catsEffectVersion % Test,
-      "com.dimafeng"                 %% "testcontainers-scala-localstack" % tcVersion % Test,
+      // WireMock stubs the loyalty partner in `LoyaltyClientSuite`. Testcontainers is not
+      // here: the integration suite that needs it lives in the `it` module.
       "org.wiremock"                  % "wiremock"            % wiremockVersion   % Test
     ) ++ weaverDeps,
     testFrameworks += new TestFramework("weaver.framework.CatsEffect"),
@@ -143,6 +144,40 @@ lazy val lambda = project
       streams.value.log.info(s"staged ${jar.getName} for the hot-reload bucket at $stage")
       stage
     }
+  )
+
+// The integration suite. Deliberately **not** aggregated by `root`, which is what keeps
+// `sbt test` free of Docker — `make test` promises "no Docker, no LocalStack" and that
+// promise is worth more than literal compliance with the brief's "via the normal test
+// task". `make test-integration` runs `sbt it/test`, which is one line in CI.
+//
+// `test->compile`, not `compile->compile`: this module has no `src/main` at all, so the
+// `service`↔`lambda` edge exists *only* on the test classpath. That answers the question
+// this layout invites — why do the producer and the consumer share a classpath when
+// production deploys them as two separate artifacts? Because nothing in `compile` scope
+// can reach across: there is no compile scope here to reach with.
+//
+// `domain` is deliberately absent from this list even though the suite uses its types:
+// they arrive transitively through `service` and `lambda`, which both depend on it. The
+// design sketched a `domain % "test->test"` edge for the ScalaCheck generators, but this
+// suite asserts the brief's worked example — fixed, published numbers — rather than
+// generated data, so that edge would declare a coupling that does not exist.
+lazy val it = project
+  .in(file("it"))
+  .dependsOn(service % "test->compile", lambda % "test->compile")
+  .settings(
+    name           := "pricing-integration",
+    publish / skip := true,
+    scalacOptions ++= futureSource,
+    libraryDependencies ++= Seq(
+      "com.dimafeng"  %% "testcontainers-scala-localstack" % tcVersion       % Test,
+      "org.wiremock"   % "wiremock"                        % wiremockVersion % Test,
+      "org.slf4j"      % "slf4j-simple"                    % slf4jVersion    % Test
+    ) ++ weaverDeps,
+    testFrameworks += new TestFramework("weaver.framework.CatsEffect")
+    // Note: the suite runs its tests one at a time, but `Test / parallelExecution` is not
+    // what does it — that setting governs parallelism *between* suites, and weaver
+    // parallelises *within* one. The knob is `maxParallelism` on the suite itself.
   )
 
 lazy val root = project
