@@ -18,9 +18,15 @@ const localMode = app.node.tryGetContext('localMode') !== 'false';
  * Under LocalStack the "artifact path" is a *directory path handed to the hot-reload
  * bucket*, not a file to upload — LocalStack mounts it as the function's code. Against a
  * real account it is the assembled jar itself.
+ *
+ * The local path is `target/hot-reload`, produced by `sbt lambda/hotReloadStage`, and not
+ * `target/scala-3.8.4` directly. The mounted directory becomes `/var/task`, and the Java
+ * runtime only reads `/var/task` and `/var/task/lib/*.jar` — pointing it at sbt's output
+ * directory deploys fine and then throws `ClassNotFoundException`, because the assembly is
+ * in neither place. See the `hotReloadStage` comment in `build.sbt`.
  */
 const lambdaArtifactPath = localMode
-  ? path.resolve(__dirname, '../../lambda/target/scala-3.8.4')
+  ? path.resolve(__dirname, '../../lambda/target/hot-reload')
   : path.resolve(__dirname, '../../lambda/target/scala-3.8.4/stream-processor-assembly.jar');
 
 // Synthesising for a real account embeds the jar as an asset, so it has to exist first.

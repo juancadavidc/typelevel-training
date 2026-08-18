@@ -1,11 +1,11 @@
 {
   "mappings": [
     {
-      "name": "gold customer qualifies for a 5% partner perk",
+      "name": "cust-789 qualifies for a 5% partner perk",
       "priority": 1,
       "request": {
         "method": "GET",
-        "urlPattern": "/loyalty/cust-123"
+        "urlPattern": "/loyalty/cust-789"
       },
       "response": {
         "status": 200,
@@ -14,7 +14,7 @@
       }
     },
     {
-      "name": "any other customer has no perk (lower priority: /loyalty/.* also matches cust-123)",
+      "name": "any other customer has no perk (lower priority: /loyalty/.* also matches cust-789)",
       "priority": 10,
       "request": {
         "method": "GET",

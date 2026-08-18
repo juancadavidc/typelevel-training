@@ -19,6 +19,15 @@ export AWS_REGION="$REGION"
 ddb() { aws dynamodb "$@" --endpoint-url "$ENDPOINT" --region "$REGION" >/dev/null; }
 
 echo "seeding Customers…"
+# cust-123 is the brief's example customer. GOLD because SUMMER10 only stacks with SILVER
+# and GOLD, so a BASIC tier here would reject the coupon the example applies.
+#
+# It deliberately has *no* partner perk in `local/wiremock/mappings/loyalty-perk.json`.
+# It used to, and the example then returned discountAmount 13.48 instead of the 8.99 the
+# brief pins, because coupon and perk stack. The brief's step 3 is an "(Optional partner
+# check)" that never states a numeric effect, and its worked example is exactly 10% floored
+# — so the example assumes no perk, and matching it is a fixture decision. Making the perk
+# not stack would be inventing a business rule the brief explicitly asks us not to add.
 ddb put-item --table-name Customers --item '{
   "customerId": {"S": "cust-123"},
   "tier":       {"S": "GOLD"},
@@ -30,6 +39,16 @@ ddb put-item --table-name Customers --item '{
   "customerId": {"S": "cust-456"},
   "tier":       {"S": "BASIC"},
   "createdAt":  {"S": "2026-03-02T11:30:00Z"}
+}'
+
+# Where the partner perk lives now, so brief step 3 stays demonstrable by hand: same tier
+# and same coupon as cust-123, plus the 5% perk the stub serves for this id only. The two
+# customers together show the stacking rule — 8.99 for cust-123, 13.48 for cust-789.
+ddb put-item --table-name Customers --item '{
+  "customerId": {"S": "cust-789"},
+  "tier":       {"S": "GOLD"},
+  "name":       {"S": "Grace Hopper"},
+  "createdAt":  {"S": "2026-02-20T08:45:00Z"}
 }'
 
 echo "seeding Coupons…"

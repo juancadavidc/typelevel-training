@@ -19,7 +19,7 @@ export AWS_ACCESS_KEY_ID     ?= test
 export AWS_SECRET_ACCESS_KEY ?= test
 export AWS_REGION            ?= us-east-1
 
-.PHONY: help up down deploy seed test test-integration smoke run-api logs clean
+.PHONY: help up down deploy seed test test-integration smoke run-api logs clean lambda-artifact
 
 help: ## Show the available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -41,11 +41,27 @@ down: ## Stop everything and remove the volumes
 	@echo "(free Hobby tier: https://app.localstack.cloud)"
 	@exit 1
 
-cdk/node_modules: cdk/package.json
-	cd cdk && npm install --no-fund --no-audit
+# `npm ci`, not `npm install`: it installs exactly what the lockfile pins and refuses to
+# rewrite it. `npm install` rewrote `package-lock.json` on the first real deploy — harmless
+# metadata churn, but it means the deploy is not reproducible and leaves the tree dirty,
+# neither of which belongs in a loop the DoD asks to be clean from a fresh checkout.
+cdk/node_modules: cdk/package.json cdk/package-lock.json
+	cd cdk && npm ci --no-fund --no-audit
 	@touch cdk/node_modules
 
-deploy: cdk/node_modules ## Deploy the CDK stacks to LocalStack
+# Not a file target: sbt already decides what needs rebuilding, and encoding the Scala
+# source tree as make prerequisites would duplicate that badly. Re-running it when nothing
+# changed costs the assembly re-zip, which is the right price for `deploy` never shipping a
+# stale jar.
+lambda-artifact: ## Assemble the Lambda and stage it for LocalStack's hot-reload bucket
+	sbt lambda/hotReloadStage
+
+# `lambda-artifact` is a prerequisite, not a documented manual step. The hot-reload bucket
+# mounts the staged directory from disk, so a `deploy` that skipped the build would wire a
+# function to whatever the last build left there — or to nothing at all on a fresh
+# checkout, where the deploy still succeeds and only the first invocation fails. The DoD
+# asks for this loop to be clean from a fresh checkout, which means the build belongs here.
+deploy: cdk/node_modules lambda-artifact ## Deploy the CDK stacks to LocalStack
 	cd cdk && ./node_modules/.bin/cdklocal bootstrap
 	cd cdk && ./node_modules/.bin/cdklocal deploy --all --require-approval never
 	@$(MAKE) --no-print-directory seed

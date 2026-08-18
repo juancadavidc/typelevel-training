@@ -16,7 +16,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 | 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ✅ done |
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ✅ done |
 | 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ✅ done — [design](superpowers/specs/2026-08-12-phase-7-stream-processor-design.md) |
-| 8 | CDK + LocalStack + docker-compose + Makefile | 🟡 written and synthesising; needs a LocalStack token to deploy |
+| 8 | CDK + LocalStack + docker-compose + Makefile | ✅ done — deployed and verified end to end; see [what actually landed](#phase-8--what-actually-landed) |
 | 9 | testcontainers integration tests, then DoD self-review | ⬜ |
 
 ## Definition of Done
@@ -32,7 +32,7 @@ Straight from the spec — this is the review checklist.
 | 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ✅ | `KinesisPublisherLive.resource`, phase 5 for DynamoDB |
 | 6 | At least one weaver test drives cats-effect's time control (`TestControl`) over the partner timeout/retry | ⬜ | phase 6 |
 | 7 | IDs use opaque types, domain ADTs use `enum`, no `var`, no shared mutable state | ✅ domain | must hold in `service`/`lambda` too |
-| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | ⬜ | phase 8 + 9 |
+| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | 🟡 | `up` and `deploy` verified by running them; `test-integration` has no suite yet — phase 9 |
 
 ### Verifying DoD #1
 
@@ -110,6 +110,135 @@ Deliberately **not** in phase 3:
 
 Carried forward: `AppError.CustomerNotFound` has no shape in the Smithy contract, so it
 would surface as a 500 today. Phase 4 adds it.
+
+## Phase 8 — what actually landed
+
+The stacks were written in phase 8 but never deployed: no LocalStack token existed at the
+time, so "synthesises cleanly" was all anyone could check. Running the loop for the first
+time found three defects, and the shape of them is the point.
+
+**The deploy was green while the system was broken.** `make up` and `cdklocal deploy` both
+succeeded, all seven resources reached `CREATE_COMPLETE`, and the API priced the brief's
+example correctly against real DynamoDB. Nothing published to Kinesis. Every failure was in
+the Lambda, past the point any of it reports success.
+
+1. **`ClassNotFoundException: StreamProcessorHandler`.** The hot-reload bucket mounts a
+   directory as `/var/task`, and the Java runtime only reads `/var/task` and
+   `/var/task/lib/*.jar`. It was pointed at `target/scala-3.8.4`, where the assembly sits
+   next to `classes/` and sbt's zinc bookkeeping — on the classpath, none of it. Fixed by
+   `sbt lambda/hotReloadStage`, which stages the jar as `target/hot-reload/lib/`.
+2. **`Unable to load an HTTP implementation from any provider in the chain`.** The real
+   find. `assemblyMergeStrategy` discarded all of `META-INF`, which deletes
+   `META-INF/services/…SdkAsyncHttpService` — the `ServiceLoader` entry through which the
+   AWS SDK v2 discovers its transport. The netty classes were in the jar the whole time
+   (172 of them); only the index that announces them was gone. Fixed by concatenating
+   `META-INF/services/*` ahead of the discard.
+3. **`make deploy` never built the artifact.** It depended only on `cdk/node_modules`, so
+   it deployed whatever the last build happened to leave on disk — and on a fresh checkout,
+   an empty directory, which still deploys and only fails on first invocation. That is
+   precisely the DoD #8 scenario. `lambda-artifact` is now a prerequisite.
+
+Also removed: a `./lambda/target/scala-3.8.4:/tmp/lambda-artifacts` mount in
+`docker-compose.yml` that appeared to feed hot-reload and did nothing. LocalStack hands the
+*host* path to the Docker daemon as the Lambda container's bind mount — `get-function`
+reports `Code.Location` as `file:///Users/...` — so it never reads the directory itself.
+Proven by accident: the staged directory was never mounted into LocalStack and worked.
+
+**What to say in review about #2.** 71 unit tests were green against a deployable artifact
+that could not construct its Kinesis client. They could not have caught it: the suite runs
+on sbt's classpath, where every dependency keeps its own `META-INF`, and the fat jar is
+built by a code path no test exercises. The lesson is not "write more unit tests" — it is
+that packaging is a distinct failure domain, and the only test that covers it is one that
+invokes the deployed function. That is the argument for phase 9 doing more than mocking.
+
+Verified end to end after the fixes — `POST /orders/price` → Orders table → stream →
+Lambda → Kinesis, one record, `partitionKey` the `orderId`, deterministic `eventId`, and
+`Money` rendered as bare JSON numbers.
+
+## The `createdAt` wire format — the same blind spot, one level up
+
+Also found in that smoke output and fixed on the same branch, because it turned out to be
+the packaging lesson again in different clothes.
+
+The API returned `"createdAt": 1787072056.690919`. The brief pins
+`"createdAt": "2026-07-22T14:32:00Z"` in its example response and `(String, ISO-8601)` in
+its data model, so this was a contract violation — but **not a smithy4s defect**. The model
+declared `createdAt: Timestamp` with no `@timestampFormat`, and the codec did exactly what
+it was told: fell back to the protocol's default JSON timestamp format, epoch-seconds. The
+contract was underspecified, and the generated code was a faithful rendering of it.
+
+Two details worth having ready in review:
+
+- **Why the Kinesis event was correct all along.** It is not the same serializer.
+  `KinesisPublisherLive` builds that JSON by hand, and `Instant.toString` is already
+  ISO-8601. Two independent encoders, one contract, and only one of them had ever been
+  checked against the brief — by eye, in a smoke test, today.
+- **Why no test caught it.** `PricingServiceImplSuite` is named "renders it as the
+  contract's response" and it passed throughout. It calls `priceOrder` and asserts fields
+  of the returned case class; it never builds a request or touches the codec, and never
+  asserted `createdAt` at all. The gap was not a missing assertion in that suite — it was a
+  missing *level*. Asserting a model cannot cover the encoding of that model.
+
+`ContractWireFormatSuite` closes it at the right level: it encodes through the same
+`smithy4s-json` codec the http4s routes use and asserts the bytes, including the whole body
+against the brief's example. Confirmed to fail without the trait — 3 of its 4 tests go red
+and the diff reads `"createdAt":1784730720` — because a regression test that passes either
+way is not one.
+
+This is the second instance in one sitting of the same shape: the deployed artifact and the
+serialized bytes are each a failure domain that model-level tests cannot reach. That, not
+"more coverage", is the argument for what phase 9 has to exercise.
+
+## The brief is the specification
+
+Two more disagreements between that smoke output and the brief. Both were settled by the
+same ruling — **the brief is the spec** — and neither was a defect in the code that computes
+the answer. Worth having ready, because "the code is right and the output is still wrong"
+is the kind of thing a reviewer probes.
+
+### `discountAmount` was `13.48`, not the `8.99` the brief pins
+
+A **fixtures** problem, and the reasoning matters more than the fix. The perk stacked on top
+of the coupon (`8.99 + 4.49`, each rounded down), which is exactly what `Pricing.price` says
+it does. Three facts settle whether that is wrong:
+
+- The brief's step 3 is an *"(Optional partner check)"* and never states a numeric effect
+  for the perk.
+- The brief never says `cust-123` is GOLD, or that it has a perk at all.
+- The brief's worked example is exactly 10% of `89.97` floored — the coupon alone.
+
+So the example assumes no perk, and reproducing it means seeding the example customer
+without one. Making perks *not* stack would be inventing a business rule to explain a
+number, against the brief's explicit *"Resist adding more business rules"* — and it would be
+the wrong rule, since nothing states it. `Pricing.price` is untouched.
+
+The perk moved to a new `cust-789`, same GOLD tier and same coupon, so brief step 3 stays
+demonstrable by hand and the two customers together *show* the stacking rule: `8.99` for
+`cust-123`, `13.48` for `cust-789`. `cust-123` stays GOLD because SUMMER10 only stacks with
+SILVER and GOLD — a BASIC tier there would reject the very coupon the example applies.
+
+### `createdAt` had sub-second precision
+
+Distinct from the wire-format defect above and found by fixing it: once the field rendered
+as ISO-8601 it read `"2026-08-18T17:20:33.414702Z"`, where the brief's example is
+`"2026-07-22T14:32:00Z"`. The clock read at the edge is now truncated to
+`ChronoUnit.SECONDS`.
+
+Truncated at the edge rather than in the encoder, because `requestContext` is the one place
+the timestamp enters the system: the same `Instant` reaches the response, the Orders item
+and — through the stream processor's `eventId` derivation — the event's idempotency key.
+Truncating in the encoder would have made the response disagree with the row it claims to
+describe, and left the `eventId` derived from a value nobody can read back. Verified on the
+running stack: response, DynamoDB item and Kinesis event all carry the same
+`2026-08-18T17:34:42Z`.
+
+The test for it reads the *real* clock and asserts the nanosecond field is zero — which is
+deterministic precisely because truncation is what makes it so. Pinning a fixed `Clock`
+would only have proved that a fixed instant survives the flow, and could not fail if the
+truncation were removed. Confirmed to go red without it.
+
+`make smoke` now reproduces the brief's example response exactly, `orderId` and `createdAt`
+aside. That is the precondition for phase 9's integration test asserting numbers at all.
 
 ## Open decisions to defend in review
 

@@ -35,6 +35,15 @@ lazy val weaverDeps = Seq(
   "org.typelevel" %% "weaver-scalacheck" % weaverVersion % Test
 )
 
+// LocalStack's `hot-reload` bucket mounts a directory as the function's `/var/task`, and
+// the Java runtime only puts `/var/task` itself and `/var/task/lib/*.jar` on the
+// classpath. Handing it `target/scala-3.8.4` — where sbt keeps `classes/`, three
+// different jars and its own zinc bookkeeping — deploys cleanly and then dies with
+// `ClassNotFoundException` on the first invocation, because the assembly sits in a
+// directory nobody reads. This task builds the one layout that works.
+lazy val hotReloadStage =
+  taskKey[File]("Assemble the Lambda and stage it in the layout LocalStack's hot-reload bucket needs")
+
 // El núcleo puro. Su lista de dependencias ES la regla 1 del DoD hecha estructura:
 // sin cats-effect, sin http4s y sin el SDK de AWS en el classpath, no se puede
 // violar por accidente.
@@ -107,8 +116,32 @@ lazy val lambda = project
     // Without it sbt-assembly appends the version and CDK cannot find the artifact.
     assembly / assemblyJarName := "stream-processor-assembly.jar",
     assembly / assemblyMergeStrategy := {
-      case PathList("META-INF", _*) => MergeStrategy.discard
-      case _                        => MergeStrategy.first
+      // `META-INF/services/*` must be concatenated, and this case must come first.
+      //
+      // The AWS SDK v2 finds its HTTP transport through `ServiceLoader`: `netty-nio-client`
+      // announces itself in `META-INF/services/…SdkAsyncHttpService`. Discarding all of
+      // `META-INF` deletes that index while leaving the netty classes in the jar, so the
+      // SDK reports «Unable to load an HTTP implementation from any provider in the chain»
+      // about an implementation it is carrying. Concatenating rather than taking the first
+      // matters too — several dependencies register providers under the same file name, and
+      // `first` would silently drop all but one.
+      //
+      // No unit test can catch this: the suite runs against sbt's classpath, where every
+      // dependency keeps its own `META-INF`. Only the assembled artifact is broken, which
+      // is why the integration test has to exercise the deployed Lambda.
+      case PathList("META-INF", "services", _*) => MergeStrategy.concat
+      case PathList("META-INF", _*)             => MergeStrategy.discard
+      case _                                    => MergeStrategy.first
+    },
+    hotReloadStage := {
+      val jar   = assembly.value
+      val stage = target.value / "hot-reload"
+      val lib   = stage / "lib"
+      IO.delete(stage)
+      IO.createDirectory(lib)
+      IO.copyFile(jar, lib / jar.getName)
+      streams.value.log.info(s"staged ${jar.getName} for the hot-reload bucket at $stage")
+      stage
     }
   )
 

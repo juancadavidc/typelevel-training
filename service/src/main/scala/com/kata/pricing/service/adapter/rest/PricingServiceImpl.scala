@@ -8,6 +8,8 @@ import com.kata.pricing.domain.{AppError, PricingFlow, RequestContext, TraceId}
 import natchez.Trace
 import Transformations.{toDomain, toResponse, toValidationException}
 
+import java.time.temporal.ChronoUnit
+
 /** The edge: where the polymorphic core is handed the things it cannot produce itself.
   *
   * Three jobs, and nothing else — the absence of business logic here is the point:
@@ -53,11 +55,21 @@ final class PricingServiceImpl[F[_]: MonadThrow: Clock: Trace](
     * are filed under: correlation across the process boundary comes from natchez, not
     * from a locally invented value. The fallback only matters in tests running without
     * an entrypoint.
+    *
+    * The clock reading is truncated to whole seconds because the brief's example response
+    * is `"2026-07-22T14:32:00Z"`, and the brief is the specification.
+    *
+    * Truncating here rather than at the point of rendering, because this is the *one* place
+    * the timestamp enters the system: the same `Instant` reaches the response, the Orders
+    * item and — through the stream processor's `eventId` derivation — the event's
+    * idempotency key. Truncating at the edge keeps all three identical. Truncating in the
+    * encoder would make the response disagree with the row it claims to describe, and the
+    * `eventId` would be derived from a value no one can read back.
     */
   private def requestContext: F[RequestContext] =
     for
       traceId <- Trace[F].traceId
-      now     <- Clock[F].realTimeInstant
+      now     <- Clock[F].realTimeInstant.map(_.truncatedTo(ChronoUnit.SECONDS))
     yield RequestContext(TraceId.unsafe(traceId.getOrElse("untraced")), now)
 
   /** Domain errors become Smithy errors. `ValidationException` is declared in the
