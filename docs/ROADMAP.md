@@ -155,15 +155,46 @@ Verified end to end after the fixes — `POST /orders/price` → Orders table �
 Lambda → Kinesis, one record, `partitionKey` the `orderId`, deterministic `eventId`, and
 `Money` rendered as bare JSON numbers.
 
-Carried into phase 9, both spotted in the smoke output and deliberately not fixed here
-because they are contract questions rather than packaging ones:
+Carried into phase 9, spotted in the smoke output and deliberately not fixed here because
+it is a business question, not a packaging one:
 
-- `createdAt` comes back from the API as an epoch float (`1787072056.690919`) rather than
-  the ISO-8601 string the brief shows. The Kinesis event renders it correctly, so this is
-  smithy4s timestamp formatting at the edge, not the domain.
 - `discountAmount` is `13.48`, not the `8.99` the brief pins: the GOLD loyalty perk stacks
   on top of the coupon (`8.99 + 4.49`, each rounded down). Needs a decision on whether the
   brief's worked example assumes no perk before an integration test can assert numbers.
+
+## The `createdAt` wire format — the same blind spot, one level up
+
+Also found in that smoke output and fixed on the same branch, because it turned out to be
+the packaging lesson again in different clothes.
+
+The API returned `"createdAt": 1787072056.690919`. The brief pins
+`"createdAt": "2026-07-22T14:32:00Z"` in its example response and `(String, ISO-8601)` in
+its data model, so this was a contract violation — but **not a smithy4s defect**. The model
+declared `createdAt: Timestamp` with no `@timestampFormat`, and the codec did exactly what
+it was told: fell back to the protocol's default JSON timestamp format, epoch-seconds. The
+contract was underspecified, and the generated code was a faithful rendering of it.
+
+Two details worth having ready in review:
+
+- **Why the Kinesis event was correct all along.** It is not the same serializer.
+  `KinesisPublisherLive` builds that JSON by hand, and `Instant.toString` is already
+  ISO-8601. Two independent encoders, one contract, and only one of them had ever been
+  checked against the brief — by eye, in a smoke test, today.
+- **Why no test caught it.** `PricingServiceImplSuite` is named "renders it as the
+  contract's response" and it passed throughout. It calls `priceOrder` and asserts fields
+  of the returned case class; it never builds a request or touches the codec, and never
+  asserted `createdAt` at all. The gap was not a missing assertion in that suite — it was a
+  missing *level*. Asserting a model cannot cover the encoding of that model.
+
+`ContractWireFormatSuite` closes it at the right level: it encodes through the same
+`smithy4s-json` codec the http4s routes use and asserts the bytes, including the whole body
+against the brief's example. Confirmed to fail without the trait — 3 of its 4 tests go red
+and the diff reads `"createdAt":1784730720` — because a regression test that passes either
+way is not one.
+
+This is the second instance in one sitting of the same shape: the deployed artifact and the
+serialized bytes are each a failure domain that model-level tests cannot reach. That, not
+"more coverage", is the argument for what phase 9 has to exercise.
 
 ## Open decisions to defend in review
 
