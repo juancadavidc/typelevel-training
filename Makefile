@@ -73,8 +73,16 @@ seed: ## Load the brief's example customers and coupons
 test: ## Unit tests — no Docker, no LocalStack
 	sbt test
 
-test-integration: ## Integration tests against LocalStack via testcontainers
-	sbt "service/testOnly *IntegrationSuite"
+# The `it` module is not aggregated by `root`, so `sbt test` above stays Docker-free and
+# this target is the only way in. It brings up its own LocalStack via testcontainers and
+# needs neither `make up` nor `make deploy` to have run first.
+#
+# `LOCALSTACK_AUTH_TOKEN` comes from .env because testcontainers, unlike docker compose,
+# does not read that file. The AWS credentials are exported at the top of this Makefile and
+# matter here for a specific reason: `KinesisPublisherLive` is production code and resolves
+# credentials from the default AWS chain, exactly as the deployed Lambda does.
+test-integration: .env ## Integration tests against LocalStack via testcontainers
+	set -a; . ./.env; set +a; sbt it/test
 
 run-api: ## Run the API against the local stack
 	PORT=$(API_PORT) \
