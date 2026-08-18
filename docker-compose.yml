@@ -29,9 +29,12 @@ services:
       # LocalStack needs the docker socket to run Lambda containers.
       - /var/run/docker.sock:/var/run/docker.sock
       - localstack-data:/var/lib/localstack
-      # The hot-reload bucket mounts the Lambda's build output straight from disk, which
-      # is how the free tier deploys a function without paid asset publishing.
-      - ./lambda/target/scala-3.8.4:/tmp/lambda-artifacts:ro
+      # The Lambda's build output is deliberately *not* mounted here. The hot-reload bucket
+      # takes a path on the *host* and hands it to the Docker daemon as the bind mount for
+      # the Lambda's own container, so LocalStack never reads the directory itself —
+      # `aws lambda get-function` reports it as `file:///Users/...`, a host path. A mount
+      # here looks like it is doing the work and is not: staging into a different directory
+      # than the one mounted still deploys and still runs.
     networks:
       - pricing-net
     healthcheck:

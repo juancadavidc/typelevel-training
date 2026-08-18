@@ -16,7 +16,7 @@ Spec: `docs/Scala - Typelevel Project.md`. Stack summary: `docs/relevant-stack.m
 | 5 | DynamoDB repos via `Resource`, ciris config, natchez spans, composition root | ✅ done |
 | 6 | Loyalty partner client + WireMock (happy / timeout / 5xx) + `TestControl` test | ✅ done |
 | 7 | Lambda: DynamoDB Streams → fs2 → Kinesis, idempotent | ✅ done — [design](superpowers/specs/2026-08-12-phase-7-stream-processor-design.md) |
-| 8 | CDK + LocalStack + docker-compose + Makefile | 🟡 written and synthesising; needs a LocalStack token to deploy |
+| 8 | CDK + LocalStack + docker-compose + Makefile | ✅ done — deployed and verified end to end; see [what actually landed](#phase-8--what-actually-landed) |
 | 9 | testcontainers integration tests, then DoD self-review | ⬜ |
 
 ## Definition of Done
@@ -32,7 +32,7 @@ Straight from the spec — this is the review checklist.
 | 5 | DynamoDB/Kinesis clients acquired via `Resource`, never opened/closed by hand | ✅ | `KinesisPublisherLive.resource`, phase 5 for DynamoDB |
 | 6 | At least one weaver test drives cats-effect's time control (`TestControl`) over the partner timeout/retry | ⬜ | phase 6 |
 | 7 | IDs use opaque types, domain ADTs use `enum`, no `var`, no shared mutable state | ✅ domain | must hold in `service`/`lambda` too |
-| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | ⬜ | phase 8 + 9 |
+| 8 | `make up && make deploy && make test-integration` clean from a fresh checkout | 🟡 | `up` and `deploy` verified by running them; `test-integration` has no suite yet — phase 9 |
 
 ### Verifying DoD #1
 
@@ -110,6 +110,60 @@ Deliberately **not** in phase 3:
 
 Carried forward: `AppError.CustomerNotFound` has no shape in the Smithy contract, so it
 would surface as a 500 today. Phase 4 adds it.
+
+## Phase 8 — what actually landed
+
+The stacks were written in phase 8 but never deployed: no LocalStack token existed at the
+time, so "synthesises cleanly" was all anyone could check. Running the loop for the first
+time found three defects, and the shape of them is the point.
+
+**The deploy was green while the system was broken.** `make up` and `cdklocal deploy` both
+succeeded, all seven resources reached `CREATE_COMPLETE`, and the API priced the brief's
+example correctly against real DynamoDB. Nothing published to Kinesis. Every failure was in
+the Lambda, past the point any of it reports success.
+
+1. **`ClassNotFoundException: StreamProcessorHandler`.** The hot-reload bucket mounts a
+   directory as `/var/task`, and the Java runtime only reads `/var/task` and
+   `/var/task/lib/*.jar`. It was pointed at `target/scala-3.8.4`, where the assembly sits
+   next to `classes/` and sbt's zinc bookkeeping — on the classpath, none of it. Fixed by
+   `sbt lambda/hotReloadStage`, which stages the jar as `target/hot-reload/lib/`.
+2. **`Unable to load an HTTP implementation from any provider in the chain`.** The real
+   find. `assemblyMergeStrategy` discarded all of `META-INF`, which deletes
+   `META-INF/services/…SdkAsyncHttpService` — the `ServiceLoader` entry through which the
+   AWS SDK v2 discovers its transport. The netty classes were in the jar the whole time
+   (172 of them); only the index that announces them was gone. Fixed by concatenating
+   `META-INF/services/*` ahead of the discard.
+3. **`make deploy` never built the artifact.** It depended only on `cdk/node_modules`, so
+   it deployed whatever the last build happened to leave on disk — and on a fresh checkout,
+   an empty directory, which still deploys and only fails on first invocation. That is
+   precisely the DoD #8 scenario. `lambda-artifact` is now a prerequisite.
+
+Also removed: a `./lambda/target/scala-3.8.4:/tmp/lambda-artifacts` mount in
+`docker-compose.yml` that appeared to feed hot-reload and did nothing. LocalStack hands the
+*host* path to the Docker daemon as the Lambda container's bind mount — `get-function`
+reports `Code.Location` as `file:///Users/...` — so it never reads the directory itself.
+Proven by accident: the staged directory was never mounted into LocalStack and worked.
+
+**What to say in review about #2.** 71 unit tests were green against a deployable artifact
+that could not construct its Kinesis client. They could not have caught it: the suite runs
+on sbt's classpath, where every dependency keeps its own `META-INF`, and the fat jar is
+built by a code path no test exercises. The lesson is not "write more unit tests" — it is
+that packaging is a distinct failure domain, and the only test that covers it is one that
+invokes the deployed function. That is the argument for phase 9 doing more than mocking.
+
+Verified end to end after the fixes — `POST /orders/price` → Orders table → stream →
+Lambda → Kinesis, one record, `partitionKey` the `orderId`, deterministic `eventId`, and
+`Money` rendered as bare JSON numbers.
+
+Carried into phase 9, both spotted in the smoke output and deliberately not fixed here
+because they are contract questions rather than packaging ones:
+
+- `createdAt` comes back from the API as an epoch float (`1787072056.690919`) rather than
+  the ISO-8601 string the brief shows. The Kinesis event renders it correctly, so this is
+  smithy4s timestamp formatting at the edge, not the domain.
+- `discountAmount` is `13.48`, not the `8.99` the brief pins: the GOLD loyalty perk stacks
+  on top of the coupon (`8.99 + 4.49`, each rounded down). Needs a decision on whether the
+  brief's worked example assumes no perk before an integration test can assert numbers.
 
 ## Open decisions to defend in review
 
